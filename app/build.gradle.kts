@@ -1,10 +1,11 @@
 import java.io.File
+import java.util.Properties
 
 plugins {
     id("com.android.application")
 }
 
-val keystoreProps = java.util.Properties().apply {
+val keystoreProps = Properties().apply {
     rootProject.file("keystore.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
 }
 val keystoreFile: File? = keystoreProps.getProperty("storeFile")?.takeIf { it.isNotEmpty() }?.let { File(it) }
@@ -58,12 +59,6 @@ android {
 
     androidResources {
         noCompress += listOf("ttf", "flac")
-    }
-
-    packaging {
-        jniLibs {
-            useLegacyPackaging = true
-        }
     }
 
     compileOptions {
