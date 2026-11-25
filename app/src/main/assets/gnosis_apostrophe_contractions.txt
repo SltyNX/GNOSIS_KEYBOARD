@@ -1,0 +1,150 @@
+# English Apostrophe, Contraction & Word-Form Correction List
+# For an offline keyboard autocorrect/suggestion dictionary.
+# Format: typed_form<TAB>suggested_form
+
+# PERSONAL PRONOUN + BE
+im	I'm
+ive	I've
+ill	I'll
+id	I'd
+youre	you're
+youve	you've
+youll	you'll
+youd	you'd
+hes	he's
+hed	he'd
+hell	he'll
+shes	she's
+shed	she'd
+shell	she'll
+its	it's
+itll	it'll
+itd	it'd
+were	we're
+weve	we've
+well	we'll
+wed	we'd
+theyre	they're
+theyve	they've
+theyll	they'll
+theyd	they'd
+thats	that's
+theres	there's
+heres	here's
+wheres	where's
+whos	who's
+whats	what's
+whens	when's
+whys	why's
+hows	how's
+whichs	which's
+thatll	that'll
+therell	there'll
+herell	here'll
+wholl	who'll
+whatll	what'll
+whod	who'd
+whatd	what'd
+whered	where'd
+whend	when'd
+whyd	why'd
+howd	how'd
+whomll	whom'll
+whomd	whom'd
+
+# NEGATIVE CONTRACTIONS
+dont	don't
+doesnt	doesn't
+didnt	didn't
+isnt	isn't
+arent	aren't
+wasnt	wasn't
+werent	weren't
+hasnt	hasn't
+havent	haven't
+hadnt	hadn't
+wont	won't
+wouldnt	wouldn't
+shouldnt	shouldn't
+couldnt	couldn't
+mustnt	mustn't
+mightnt	mightn't
+neednt	needn't
+cannot	can't
+cant	can't
+aint	ain't
+shant	shan't
+oughtnt	oughtn't
+maynt	mayn't
+darent	daren't
+
+# SPOKEN CONTRACTIONS & DOUBLE CONTRACTIONS
+yall	y'all
+yallre	y'all're
+yallve	y'all've
+yallll	y'all'll
+yall d	y'all'd
+maam	ma'am
+oclock	o'clock
+rocknroll	rock 'n' roll
+
+# NEGATIVE AND AUXILIARY PHRASES
+couldve	could've
+shouldve	should've
+wouldve	would've
+mightve	might've
+mustve	must've
+mayve	may've
+coulda	could've
+shoulda	should've
+woulda	would've
+mighta	might've
+musta	must've
+couldntve	couldn't've
+shouldntve	shouldn't've
+wouldntve	wouldn't've
+mightntve	mightn't've
+
+# POSSESSIVES AND APOSTROPHE-S FORMS
+johns	John's
+marys	Mary's
+james	James
+james's	James's
+childrens	children's
+mens	men's
+womens	women's
+peoples	people's
+todays	today's
+tomorrows	tomorrow's
+yesterdays	yesterday's
+weeks	week's
+months	month's
+years	year's
+mondays	Monday's
+tuesdays	Tuesday's
+wednesdays	Wednesday's
+thursdays	Thursday's
+fridays	Friday's
+saturdays	Saturday's
+sundays	Sunday's
+worlds	world's
+lifes	life's
+moms	mom's
+dads	dad's
+friends	friend's
+family's	family's
+someone elses	someone else's
+everyones	everyone's
+someones	someone's
+anyones	anyone's
+nobodys	nobody's
+everybodys	everybody's
+ones	one's
+others	other's
+
+# COMMON SPELLING / AUTOCORRECTION CASES
+dontt	don't
+cantt	can't
+woudnt	wouldn't
+isntt	isn't
+didntt	didn't

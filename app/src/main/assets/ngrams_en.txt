@@ -1,0 +1,783 @@
+# English n-gram seeds. "w1: a b c" = bigram, "w1 w2: a b c" = trigram. Followers are ordered most likely first.
+the: same best first next other only last way most new end rest day world whole right
+a: lot few little bit good great new big long couple while small quick better
+an: idea hour issue example email amazing important
+and: i the then we it you also so they
+but: i it the you we if then
+or: something anything not the maybe else
+so: i much far many we what you that good
+if: you i we it there that the possible
+because: i of it the you we
+that: is was i you would it the we sounds looks makes will can
+this: is was will morning week time year one looks sounds means
+these: are days
+those: are who days
+there: is are was were will
+here: is are you we
+what: is are do did about the time happened if
+when: i you we the do is will are did can
+where: are is do did the you were can have
+who: is are was can will were
+why: not do did is are would
+how: are is do can about long many much to was
+which: is one means
+of: the course my a our your this all
+to: be the do get have make go see help know take
+in: the a my your order case touch fact general our advance
+on: the my a your our time it this
+at: the home work least all once school
+for: the a me you your now example sure this our
+with: the you me a my your us that them
+from: the my your now
+by: the now
+about: the it that this a your
+as: soon well much possible a
+is: it that the a not there this good ready possible
+are: you we they the there not going all
+was: a the it not so very
+were: you the not
+be: able there a careful sure
+been: a to there working
+have: a to been the you any no done fun
+has: been a to the
+had: a to been the
+do: you not it we
+does: it not the this
+did: you not it we
+will: be you it do
+would: you be like have love
+could: you be have not do
+should: i be we have
+can: you i we be do get see help
+may: i be
+might: be have
+must: be have
+i: am will have would think can don't want know need like feel hope
+i'm: not going so sorry sure a
+i'll: be send let do see
+i've: been a got never
+i'd: like love be say
+you: are can have know want need will should get see think look
+you're: welcome right not a so
+we: are can will have need should could want hope must
+we're: going not all
+they: are were will have can don't said might
+he: is was will has said can knows wants
+she: is was will has said can knows wants
+it: is was will has can would looks seems works depends
+it's: a not the good been
+that's: a not the great fine
+what's: up the your
+there's: a no
+let's: go do see talk
+let: me us it know them
+me: know the to a
+my: name friend phone own
+your: name welcome email
+our: team new
+please: let send check find call help confirm do don't
+thanks: for a so again man bro
+thank: you so very
+sorry: for i about
+hello: how everyone there
+hi: there how
+hey: there how
+good: morning afternoon evening night luck job idea point to
+great: job to idea day
+nice: to one job day work
+happy: birthday to new
+birthday: party wishes
+see: you the if it what how
+look: at forward like
+looking: forward for at good
+forward: to
+talk: to about soon later
+speak: to with soon
+call: me you back
+send: me it the
+get: back the a it
+got: it a the
+go: to ahead back
+going: to on
+want: to a
+wanted: to
+need: to a
+like: to a the
+love: you to the it
+know: that what how if
+think: that so it
+feel: like free
+make: sure it a
+take: care a your time it
+come: back on
+back: to
+tell: me you him
+ask: me you
+give: me it
+show: me
+find: out the a
+try: to again
+keep: in it
+wait: for
+check: the it out
+let me: know see check think
+let us: know
+thank you: so very for
+thank you very: much
+thank you so: much
+how are: you things we
+how are you: doing
+how do: you i we
+how to: do get make
+how about: you the we tomorrow
+how long: will does is have
+how many: times people
+how much: is does
+what do: you we
+what are: you we the
+what is: the your
+what time: is are
+what about: you
+what a: great
+see you: soon later tomorrow there then
+see you at: the
+looking forward: to
+forward to: seeing it
+talk to: you
+talk to you: later soon tomorrow
+as soon: as
+soon as: possible
+as soon as: possible
+as well: as
+as long: as
+as much: as
+as far: as
+at the: moment end same
+at least: i
+in the: morning evening meantime
+in order: to
+in case: you
+in touch: with
+in fact: i
+on the: way other
+on my: way own
+on time: for
+on the other: hand
+by the: way
+by the way: i
+have a: great good nice look
+have a great: day time weekend
+have a good: day one weekend
+have a nice: day weekend
+have to: be
+have been: a
+has been: a
+going to: be
+want to: be
+need to: be
+i am: not going sorry happy
+i am going: to
+i will: be send call check
+i will be: there
+i would: like appreciate love
+i would like: to
+i don't: know have
+i don't know: what how
+i don't think: so
+i can: not help send
+i can't: wait
+i think: so we
+i think it: is
+i hope: you so
+i hope you: are
+i hope you are: doing
+i love: you
+i want: to
+i need: to help
+i have: a
+i have to: go
+i was: wondering just
+i was just: wondering
+you can: also use
+you are: welcome right
+you are welcome: to
+you are a: great
+do you: have want know
+do you have: any
+do you want: to
+do you know: what
+can you: please help
+can you please: send
+can we: meet
+would you: like
+would you like: to
+could you: please
+could you please: send
+are you: sure
+are you coming: to
+no problem: at
+no worries: at
+make sure: you that to
+sounds good: to
+sounds great: to
+sounds like: a
+good morning: everyone to
+good night: and
+good luck: with
+good to: see know
+nice to: meet see
+nice to meet: you
+it is: a not
+it was: a great nice
+it will: be
+it would: be
+it might: be
+that is: a not
+that was: a
+that would: be
+there is: a no
+there are: a no
+this is: a not
+this is the: best first
+this will: be
+we are: going all
+we will: be
+we can: do meet
+we need: to
+we have: a to
+they are: going not
+he is: a
+she is: a
+what if: we
+if you: have want need
+if you have: any
+if you need: any
+if you want: to
+if i: can
+if i can: help
+please let: me
+please let me: know
+please find: attached the
+please send: me
+please check: the your
+please confirm: your that
+please note: that
+let me know: if what when how your
+let me know if: you
+let me know when: you
+thanks for: the your letting sharing coming getting everything
+thanks for the: help update
+thanks for your: help
+thanks for letting: me
+for the: first
+for example: if
+for me: to
+for you: to
+for your: help
+with you: soon
+with the: help
+with a: few
+out of: the
+one of: the
+some of: the
+all of: the you
+a lot: of
+a lot of: people
+a bit: of
+a few: of days minutes things
+kind of: a
+sort of: a
+more than: i a that
+less than: a
+rather than: a
+because of: the
+instead of: the
+such as: the
+due to: the
+according to: the
+is it: possible
+is there: a
+is this: the
+is that: a
+will it: be
+will you: be
+will you be: there
+will you please: send
+what happened: to
+what happened to: you
+who is: this he
+where is: the
+where are you: now from
+when is: the
+when will: you
+when will you: be
+why did: you
+why do: you
+the best: way part
+the first: time
+the last: time
+the next: day time
+the same: time thing
+the other: day
+the end: of
+the rest: of
+the way: to
+the time: to is
+the day: before after
+this week: i
+next week: i
+next time: i
+last week: i
+last night: i
+to be: honest
+to be honest: i
+to be able: to
+to do: it
+to go: to
+to the: point
+to make: sure
+to get: the
+to see: you
+to help: you
+to know: that
+to take: care
+to have: a
+sounds: good great like cool fun awesome
+no: problem worries idea way doubt matter
+don't: know worry think have want like mind
+hope: you this all everything
+thank you for: the your help letting
+i appreciate: it your the
+i appreciate your: help time
+i really: appreciate like need want
+i just: wanted wanna need
+i just wanted: to
+i am sorry: for
+i am happy: to
+i am writing: to
+i am available: for
+i am not: sure
+i am sure: that
+i have been: working
+i will send: you
+i will call: you
+i will check: and
+i will get: back
+i will let: you
+i can help: you
+i would appreciate: it
+i wanted: to
+i think we: should
+i think you: should
+i know: that
+i know you: are
+i feel: like
+i guess: so
+i mean: i
+i see: what
+i understand: that
+i agree: with
+i agree with: you
+i believe: that
+i didn't: know
+i didn't mean: to
+i don't have: any
+i don't want: to
+i can't find: it
+i can't make: it
+i'm sorry: for
+i'm going: to
+i'm not: sure
+i'm looking: for
+i'm happy: to
+i'm trying: to
+i'm sure: you
+i'll be: there
+i'll send: you
+i'll see: you
+i'll call: you
+i've got: a
+i've been: working
+it's a: great
+it's not: a
+it's been: a
+it's okay: ok
+it's time: to
+it's going: to
+it was nice: to
+it was great: to
+it is not: a
+it is a: good
+it is going: to
+it seems: like
+it looks: like
+it works: for
+it depends: on
+it makes: sense
+it makes sense: to
+it doesn't: matter
+it doesn't work: for
+that makes: sense
+that sounds: great good
+that works: for
+that works for: me
+that's fine: with
+that's great: to
+that sounds good: to
+that would be: great
+that will: be
+that is not: the
+that is why: i
+you should: have be
+you should be: able
+you should know: that
+you need: to
+you need to: be
+you can use: the
+you can find: it
+you can also: use
+you could: try
+you may: want
+you might: want
+you want: to
+you want to: be
+you know: what
+you know what: i
+you have: to
+you have to: be
+you have a: great
+you will: be
+you will need: to
+you will be: able
+you were: right
+you are right: about
+you are going: to
+you are not: alone
+you're right: about
+you're welcome: to
+you're going: to
+you've: been
+we should: go
+we should be: able
+we need to: talk do
+we can do: it
+we will see: you
+we have to: go
+we are going: to
+we're going: to
+we're not: sure
+we're looking: for
+they will: be
+they have: been
+they were: not
+he said: that
+she said: that
+he was: not
+she was: not
+this is a: great
+this is my: first
+this is going: to
+this was: a
+this morning: i
+this afternoon: i
+this evening: i
+this time: i
+please do: not
+please don't: forget
+please feel: free
+please feel free: to
+please see: the
+please send me: the
+please reply: to
+please call: me
+please share: your
+please take: a
+please visit: our
+please contact: us
+please provide: the
+good to see: you
+good to hear: from
+good job: on
+great to: see
+great to hear: from
+great to meet: you
+nice to hear: from
+happy to: help
+happy to see: you
+happy to hear: that
+happy to help: you
+happy birthday: to
+happy new: year
+happy anniversary: to
+looking forward to: it
+looking for: a
+looking for the: best
+looking at: the
+waiting for: you
+waiting for the: response
+waiting for your: reply
+hear from: you
+hearing from: you
+hear from you: soon
+get back: to
+get back to: you
+get in: touch
+get in touch: with
+get it: done
+get started: with
+get ready: for
+get a: chance
+go ahead: and
+go to: the
+go back: to
+go for: it
+go out: for
+come back: to
+come to: the
+come over: to
+let me check: and
+let me see: if
+let me think: about
+let me try: again
+let us know: if
+make it: to
+make a: decision
+make sense: to
+make the: most
+take a: look
+take a look: at
+take care: of
+take care of: yourself
+take it: easy
+take your: time
+take some: time
+work on: it
+work on the: project
+work with: you
+work for: you
+working on: it
+working on the: project
+working on a: new
+working with: you
+have a look: at
+have a safe: trip
+have you: seen been got
+have you seen: the
+have you been: to
+have you ever: been
+has not: been
+had a: great
+had to: go
+had been: a
+how is: your
+how is it: going
+how was: your
+how was your: day
+how do you: do
+how does it: work
+how can: i
+how can i: help
+how can we: help
+how did: you
+how did it: go
+how far: is
+how about we: meet
+what are you: doing up
+what are you up: to
+what is the: best
+what is going: on
+what is your: name
+what was: the
+what time do: you
+what do you: think mean
+what do you want: to
+what did: you
+what did you: do
+what does: it
+what does it: mean
+what would: you
+what would you: like
+what if i: told
+what's the: best
+what's your: name
+what's going: on
+what's wrong: with
+where are: you
+where do: you
+where do you: live
+where did: you
+where can: i
+where can i: find
+when are: you
+when are you: coming
+when do: you
+when do you: want
+when did: you
+when can: we
+when can we: meet
+when you: get
+when you get: a
+when you are: free
+when i: get
+why are: you
+why is: it
+why do you: want
+why don't: you
+why don't we: go
+who are: you
+who was: that
+who can: help
+which one: is do
+which is: the
+there is no: way
+there is a: lot
+there are many: ways
+there was: a
+there will: be
+there will be: a
+here is: the a
+here is the: link
+here is a: link
+here are: the some
+here are the: details
+here you: go
+if you could: please
+if you don't: mind
+if you have any: questions
+if there: is
+if we: can
+if it: is
+if it's: ok
+as a: result
+as per: the
+as per my: last
+as you: know
+as you can: see
+as i: said
+as of: now
+in the morning: i
+in addition: to
+on my way: to
+at the same: time
+for the next: time
+for the time: being
+for more: information
+for more information: please
+with the best: regards
+without a: doubt
+about the: project
+about to: go
+because i: have
+before i: forget
+before the: meeting
+after the: meeting
+by the end: of
+by the time: i
+best wishes: for
+thanks again: for
+thanks a: lot
+thanks so: much
+thanks in: advance
+see you in: the
+see you next: week
+see you on: monday
+call me: when back later
+call you: later back
+text me: when
+send me: the a
+send me your: number
+send it: to
+send you: a
+send you the: link
+send the: details
+let's meet: at
+let's talk: about
+let's do: it
+let's see: what
+let's get: started
+let's go: for
+let's try: to
+let's catch: up
+let's keep: in
+the problem: is
+the reason: i
+the thing: is
+the fact: that
+the only: thing
+the most: important
+the project: is
+the meeting: is
+the report: is
+the document: is
+the file: is
+the link: is
+the day after: tomorrow
+the day before: yesterday
+a good: idea day
+a great: idea day
+a little: bit
+a long: time
+a long time: ago
+a new: one
+a couple: of
+a couple of: days
+one of the: best
+one more: thing
+one thing: i
+one day: i
+one time: i
+all the: best
+every time: i
+every one: of
+some people: are
+most of: the
+most people: are
+many of: the
+many people: are
+much more: than
+more or: less
+more information: about
+no one: is knows
+not sure: if what how about
+not a: problem
+not at: all
+not only: that
+not too: bad
+too many: people
+very happy: to
+very nice: to
+so much: for
+so far: so
+so many: people
+so that: we
+so i: can
+so we: can
+so you: can
+but i: don't am
+but i'm: not
+but it: is
+but we: can
+but you: can
+and i: think will
+and then: i we
+and we: can
+and you: can
+and the: other
+and so: on
+or you: can
+or we: can
+than you: think
+than i: thought
+then i: will
+then we: can
+then you: can
+just a: moment second minute little
+just to: let
+just to let: you
+just to let you: know
+just let: me
+just in: case
+just wanted: to
+just wanted to: say let
+also: i you please
+also be: a

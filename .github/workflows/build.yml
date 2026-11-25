@@ -1,0 +1,301 @@
+name: Build Gnosis Keyboard APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create GitHub Release with APK'
+        required: false
+        default: false
+        type: boolean
+  
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Package APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Read & Bump Build Version
+        id: versioning
+        env:
+          INPUT_RELEASE: ${{ github.event.inputs.create_release }}
+        run: |
+          get() { grep -iE "^[[:space:]]*$1[[:space:]]*:" placeholder.txt | head -1 | cut -d: -f2- | tr -d '[:space:]'; }
+
+          OLD=$(get Versioncode)
+          if [[ ! "$OLD" =~ ^[0-9]+$ ]]; then
+            echo "::error file=placeholder.txt::Versioncode missing or not a number (got '$OLD')"
+            exit 1
+          fi
+          NEW=$((OLD + 1))
+
+          OLD_VER=$(get Appversion)
+          if [[ ! "$OLD_VER" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error file=placeholder.txt::Appversion must look like 32.0.0 (got '$OLD_VER')"
+            exit 1
+          fi
+          MAJ=$((10#${BASH_REMATCH[1]})); MIN=$((10#${BASH_REMATCH[2]})); PAT=$((10#${BASH_REMATCH[3]}))
+          PAT=$((PAT + 1))
+          if [ "$PAT" -gt 99 ]; then PAT=0; MIN=$((MIN + 1)); fi
+          if [ "$MIN" -ge "$MAJ" ]; then MAJ=$((MAJ + 1)); MIN=0; PAT=0; fi
+          NEW_VER="$MAJ.$MIN.$PAT"
+
+          sed -i -E "s/^([[:space:]]*Appversion[[:space:]]*:).*/\1 $NEW_VER/I" placeholder.txt
+          sed -i -E "s/^([[:space:]]*Versioncode[[:space:]]*:).*/\1 $NEW/I" placeholder.txt
+
+          VERSION=$(get Appversion)
+          CODE=$(get Versioncode)
+          if [[ ! "$VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
+            echo "::error file=placeholder.txt::Appversion missing or invalid (got '$VERSION')"
+            exit 1
+          fi
+
+          RELEASE=$(get Release | tr 'A-Z' 'a-z')
+          case "$RELEASE" in
+            yes|y|true) RELEASE=true ;;
+            no|n|false|"") RELEASE=false ;;
+            *) echo "::error file=placeholder.txt::Release must be yes or no (got '$RELEASE')"; exit 1 ;;
+          esac
+          if [ "$INPUT_RELEASE" = "true" ]; then
+            RELEASE=true
+          fi
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "CODE=$CODE" >> "$GITHUB_ENV"
+          echo "RELEASE=$RELEASE" >> "$GITHUB_ENV"
+          echo "APK_NAME=Gnosis-Keyboard-v$VERSION-c$CODE.apk" >> "$GITHUB_ENV"
+          echo "Build number: $OLD -> $NEW"
+          echo "Version: $VERSION (Code: $CODE, Release: $RELEASE)"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '9.6.0'
+          cache-disabled: false
+
+      - name: Write key
+        env:
+          KEY_STORE: ${{ secrets.KEY_STORE }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEY_STORE" ]; then
+            echo storePassword="$KEY_STORE_PASSWORD" >> keystore.properties
+            echo keyAlias="$ALIAS" >> keystore.properties
+            echo keyPassword="$KEY_PASSWORD" >> keystore.properties
+            echo storeFile="$PWD/key.jks" >> keystore.properties
+            echo "$KEY_STORE" | base64 --decode > key.jks
+          else
+            echo "::warning::KEY_STORE secret not set, building unsigned"
+          fi
+
+      - name: Build APK with Gradle
+        run: gradle assembleRelease --stacktrace --warning-mode all
+
+      - name: Prepare Distribution Artifacts
+        run: |
+          mkdir -p dist
+          OUTPUT_DIR=app/build/outputs/apk/release
+          APK_FILE=$(find $OUTPUT_DIR -name "*.apk" | head -1)
+          if [ -z "$APK_FILE" ]; then
+            echo "Error: APK not found in $OUTPUT_DIR"
+            exit 1
+          fi
+          cp "$APK_FILE" "dist/$APK_NAME"
+          (cd dist && sha256sum "$APK_NAME" > "$APK_NAME.sha256")
+          echo "Generated APK: $APK_NAME"
+          cat "dist/$APK_NAME.sha256"
+          {
+            echo "### Build #$CODE · v$VERSION · Release: $RELEASE"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| File | \`$APK_NAME\` |"
+            echo "| Size | $(du -h "dist/$APK_NAME" | cut -f1) |"
+            echo "| APK SHA-256 | \`$(cut -d' ' -f1 "dist/$APK_NAME.sha256")\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.APK_NAME }}
+          path: |
+            dist/${{ env.APK_NAME }}
+            dist/${{ env.APK_NAME }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Commit version back to repo
+        id: commit_version
+        if: github.ref_type == 'branch'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if git diff --quiet -- placeholder.txt; then
+            echo "placeholder.txt already up to date"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add placeholder.txt
+            git commit -m "Build #$CODE: set Appversion and Versioncode [skip ci]"
+            git pull --rebase origin "$REF_NAME"
+            git push origin "HEAD:$REF_NAME"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Write release notes
+        if: env.RELEASE == 'true'
+        run: |
+          {
+            echo "## Gnosis Keyboard v$VERSION"
+            echo "- Fully native Android Keyboard written in Kotlin"
+            echo "- Omnitype layout, docking toolbar, and theme presets"
+            echo "- Lucide vector icons"
+            echo "- Rich image copy/paste clipboard via \`commitContent\`"
+            echo "- Text-only emoji category selector bar"
+            echo "- Stuck popup and emoji crash bug fixes"
+            echo ""
+            echo "**SHA-256 Checksum:**"
+            echo '```'
+            cat "dist/$APK_NAME.sha256"
+            echo '```'
+          } > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Create GitHub Release
+        if: env.RELEASE == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ env.VERSION }}-c${{ env.CODE }}
+          name: "Gnosis Keyboard v${{ env.VERSION }} (Build ${{ env.CODE }})"
+          body_path: ${{ runner.temp }}/release-notes.md
+          target_commitish: ${{ steps.commit_version.outputs.sha }}
+          files: |
+            dist/${{ env.APK_NAME }}
+            dist/${{ env.APK_NAME }}.sha256
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post to Telegram
+        continue-on-error: true
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACTOR: ${{ github.triggering_actor }}
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+          BUILD_TZ: UTC
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+            echo "::warning::TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set, skipping"
+            exit 0
+          fi
+
+          ZIP="dist/${APK_NAME%.apk}.zip"
+          (cd dist && zip -q "$(basename "$ZIP")" "$APK_NAME" "$APK_NAME.sha256")
+          SIZE=$(stat -c%s "$ZIP")
+          LIMIT=$((50 * 1024 * 1024))
+
+          SHA=$(cut -d' ' -f1 "dist/$APK_NAME.sha256")
+          esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+          MSG=$(git log -1 --format=%s "$COMMIT_SHA" 2>/dev/null || true)
+          [ -z "$MSG" ] && MSG="(no commit message)"
+          [ "${#MSG}" -gt 200 ] && MSG="${MSG:0:200}…"
+          RAW_MSG="$MSG"
+          MSG=$(printf '%s' "$MSG" | esc)
+          SHORT="${COMMIT_SHA:0:7}"
+          BUILT_AT=$(TZ="$BUILD_TZ" date '+%d %b %Y, %H:%M %Z')
+          TEXT=$(printf '%s\n' \
+            "✅ <b>Gnosis Keyboard</b> <code>v$VERSION</code> · Build #$CODE" \
+            "" \
+            "📝 <b>Commit</b>" \
+            "<blockquote>$MSG</blockquote>" \
+            "" \
+            "👤 <b>Authored :</b> <a href=\"https://github.com/$ACTOR\">$ACTOR</a>" \
+            "🌿 <b>Branch :</b> <code>$BRANCH</code>" \
+            "🔖 <b>Commit :</b> <a href=\"https://github.com/$REPO/commit/$COMMIT_SHA\">$SHORT</a>" \
+            "🕒 <b>Built :</b> $BUILT_AT" \
+            "" \
+            "🔐 <b>SHA-256</b>" \
+            "<code>$SHA</code>")
+
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "Zip is $SIZE bytes (over 50 MB). Sending message only."
+            curl -sS --fail-with-body --connect-timeout 15 --max-time 300 -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+              --form-string chat_id="$TG_CHAT" \
+              --form-string parse_mode=HTML \
+              --form-string text="$TEXT"$'\n'"(File too large to upload here)"
+            exit 0
+          fi
+
+          THUMB=""
+          if [ -f thumb.jpg ]; then
+            OUT="$RUNNER_TEMP/tg_thumb.jpg"
+            if ! python3 -c 'import PIL' 2>/dev/null; then
+              python3 -m pip install -q --disable-pip-version-check --break-system-packages pillow > /dev/null 2>&1 || true
+            fi
+            python3 - thumb.jpg "$OUT" <<'PY' && THUMB="$OUT"
+          import os, sys
+          from PIL import Image, ImageOps
+          src, out = sys.argv[1], sys.argv[2]
+          im = ImageOps.exif_transpose(Image.open(src))
+          if im.mode in ("RGBA", "LA", "P"):
+              im = im.convert("RGBA")
+              bg = Image.new("RGB", im.size, "white")
+              bg.paste(im, mask=im.split()[-1])
+              im = bg
+          else:
+              im = im.convert("RGB")
+          im.thumbnail((320, 320))
+          for q in (90, 80, 70, 60, 50, 40, 30):
+              im.save(out, "JPEG", quality=q, optimize=True)
+              if os.path.getsize(out) < 200000:
+                  sys.exit(0)
+          sys.exit(1)
+          PY
+          fi
+          if [ -z "$THUMB" ]; then
+            echo "::error::thumb.jpg missing or could not be converted"
+            exit 1
+          fi
+
+          tg() {
+            code=$(curl -sS -o "$RUNNER_TEMP/tg.json" -w '%{http_code}' \
+              --connect-timeout 15 --max-time 300 -X POST \
+              "https://api.telegram.org/bot$TG_TOKEN/sendDocument" \
+              --form-string chat_id="$TG_CHAT" -F document=@"$ZIP" "$@") || true
+            [ "$code" = 200 ] && return 0
+            echo "::error::Telegram HTTP $code: $(cat "$RUNNER_TEMP/tg.json" 2>/dev/null)"
+            return 1
+          }
+
+          for attempt in 1 2 3; do
+            tg --form-string parse_mode=HTML --form-string caption="$TEXT" \
+              -F thumbnail=attach://thumbfile -F thumbfile=@"$THUMB" && exit 0
+            case "$code" in 429|5??|000) sleep $((attempt * 5));; *) exit 1;; esac
+          done
+          exit 1
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f key.jks keystore.properties

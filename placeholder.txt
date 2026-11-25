@@ -1,0 +1,4 @@
+------------------------- # Shared Values ------------------------
+Release : no
+Appversion : 3.0.23
+Versioncode : 223

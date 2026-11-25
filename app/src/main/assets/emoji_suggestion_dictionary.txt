@@ -1,0 +1,1334 @@
+# Offline Emoji Suggestion Dictionary
+# Format: text keyword<TAB>emoji suggestions
+# Multiple suggestions are separated by spaces.
+
+happy	😀 😃 😊
+smile	😀 😄 😊
+smiling	😊 😃 😁
+grin	😁 😄 😀
+laugh	😂 😆 🤣
+laughing	😂 🤣 😹
+lol	😂 🤣 😆
+lmao	😂 🤣 💀
+rofl	🤣 😂
+haha	😂 😆 😄
+hehe	😏 😊 😁
+funny	😂 🤣 😆
+joy	😂 😄 🥹
+love	❤️ 🩷 💖
+in love	🥰 😍 ❤️
+loved	❤️ 🥰 💕
+cute	🥰 🥹 💗
+adorable	🥹 🥰 💖
+kiss	😘 💋 😗
+kissing	😘 💋 😚
+hug	🤗 🫂
+hugs	🫂 🤗
+excited	🤩 😆 🎉
+amazing	🤩 😍 ✨
+awesome	🔥 😎 🤩
+cool	😎 🆒 ❄️
+proud	🥹 🥲 💪
+shy	☺️ 🫣 😊
+blushing	😊 ☺️ 😳
+embarrassed	😳 🫣 😅
+awkward	😬 😅 🫠
+nervous	😬 😰 🫣
+worried	😟 😕 😰
+scared	😨 😱 😰
+fear	😨 😱 👻
+shocked	😱 😳 🤯
+surprised	😮 😲 😯
+wow	😮 🤯 😍
+mind blown	🤯 😵
+confused	😕 🤔 😵‍💫
+thinking	🤔 💭 🧐
+think	🤔 🧐 💭
+curious	🤔 🧐 👀
+suspicious	🤨 👀 🧐
+side eye	🙄 👀 🤨
+eye roll	🙄 😒
+smirk	😏 😼
+wink	😉 😜
+playful	😜 😝 🤪
+silly	🤪 😜 😝
+crazy	🤪 🤯 😵‍💫
+insane	🤯 🤪 💀
+sarcastic	🙃 😏 🙄
+annoyed	😒 😤 🙄
+angry	😡 😠 🤬
+mad	😡 🤬 😤
+rage	🤬 😡 💢
+frustrated	😤 😫 😩
+sad	😢 😞 🙁
+crying	😭 😢 🥹
+cry	😭 😢
+sobbing	😭 😿
+heartbroken	💔 😭 ❤️‍🩹
+depressed	😔 😞 🌧️
+disappointed	😞 😔 😕
+lonely	🥺 😔 💔
+missing you	🥺 🫂 ❤️
+miss you	🥺 🫂 ❤️
+regret	😔 🥲
+sorry	🥺 🙏 😔
+apologize	🙏 🥺
+guilty	😔 🥺
+sleepy	😴 🥱 💤
+tired	😫 😩 🥱
+exhausted	🥱 😩 😴
+bored	🥱 😐 🙄
+sick	🤒 🤧 🤢
+ill	🤒 🤕
+fever	🤒 🌡️
+headache	🤕 🤯
+dizzy	😵‍💫 😵
+dead	💀 ☠️ 😵
+dying	💀 😭
+facepalm	🤦 🤦‍♂️ 🤦‍♀️
+shrug	🤷 🤷‍♂️ 🤷‍♀️
+whatever	🤷 🙄 😒
+meh	😐 😑 🙄
+neutral	😐 😶
+blank	😶 😐
+speechless	😶 😳
+unamused	😒 😑
+relieved	😌 😮‍💨
+peaceful	😌 🕊️
+calm	😌 🧘
+grateful	🥹 🙏 ❤️
+thankful	🙏 ❤️ 🥹
+blessed	🙏 😇 ✨
+proud of you	🥹 ❤️ 👏
+good vibes	✨ 🌈 ☀️
+mood	😭 💀 😌
+heart	❤️ 🩷 💖
+red heart	❤️
+orange heart	🧡
+yellow heart	💛
+green heart	💚
+blue heart	💙
+purple heart	💜
+black heart	🖤
+white heart	🤍
+pink heart	🩷 💗
+brown heart	🤎
+light blue heart	🩵
+broken heart	💔
+healing heart	❤️‍🩹 💗
+two hearts	💕 💞
+revolving hearts	💞
+sparkling heart	💖
+growing heart	💗
+beating heart	💓
+heart hands	🫶
+heart eyes	😍 🥰
+love you	❤️ 🥰 😘
+i love you	❤️ 🥹 💕
+love u	❤️ 😘 🥰
+ily	❤️ 🥰
+ilysm	🥹 ❤️ 💕
+my love	❤️ 🫶 😘
+sweetheart	💕 🥰 ❤️
+darling	💗 😘
+baby	👶 🥰 ❤️
+babe	🥰 😘 ❤️
+boyfriend	🧑‍❤️‍💋‍🧑 ❤️
+girlfriend	👩‍❤️‍👨 💕
+couple	👫 💑 💏
+relationship	💑 ❤️ 💕
+soulmate	💞 ❤️ 🫶
+forever	♾️ ❤️
+forever love	♾️ ❤️ 💕
+romantic	💕 🌹 😘
+romance	❤️ 🌹 💋
+date	📅 ❤️ 🌹
+crush	🥰 😍 💘
+falling in love	💘 🥰 ❤️
+proposal	💍 💐 ❤️
+marry me	💍 💒 ❤️
+wedding	💒 💍 👰
+marriage	💍 💑
+ring	💍
+engagement	💍 💖
+kiss me	😘 💋
+goodnight love	🌙 ❤️ 😘
+good morning love	🌞 ❤️ 🥰
+jealous	😒 😤 💚
+flirting	😉 😘 😏
+flirt	😏 😉 💋
+hello	👋 😊
+hi	👋 😊
+hey	👋 😄
+hii	👋 🥰
+heyy	👋 😉
+goodbye	👋 🥹
+bye	👋 😊
+good morning	🌞 ☀️ 🌻
+good afternoon	☀️ 😊
+good evening	🌆 🌇
+good night	🌙 🌃 😴
+gn	🌙 😴
+gm	🌞 ☀️
+take care	🫂 ❤️ 🤗
+welcome	🤗 👋
+welcome back	👋 🥰
+see you	👋 😊
+see you soon	👋 🫶
+brb	⏳ 👋
+thank you	🙏 ❤️ 😊
+thanks	🙏 😊
+thx	🙏
+tysm	🥹 ❤️ 🙏
+please	🥺 🙏
+pls	🥺 🙏
+please please	🥺 🥹
+my bad	😅 🙈
+no problem	😊 👍
+you're welcome	😊 🤗
+congrats	🎉 🥳 👏
+congratulations	🎉 🥳 🏆
+happy birthday	🎂 🎉 🥳
+hbd	🎂 🎉
+happy anniversary	💕 💐 🎉
+good luck	🍀 🤞
+best wishes	💐 ❤️
+all the best	🤞 🍀
+cheers	🥂 🎉
+welcome home	🏡 ❤️
+ttyl	👋 😊
+omg	😱 🤯 😭
+oh my god	😱 🤯 🙏
+wtf	🤨 😭 💀
+idk	🤷 🤔
+imo	💭 🤷
+tbh	🗣️ 💯
+fr	💯 😭
+ngl	🤫 💯
+btw	💬
+lmk	💬 👀
+wyd	👀 💬
+wya	📍 👀
+gn tc	🌙 🫂
+thumbs up	👍
+thumbsup	👍
+like	👍 ❤️
+dislike	👎
+thumbs down	👎
+okay	👌 👍
+ok	👌 👍
+perfect	👌 💯
+good	👍 😊
+yes	✅ 👍 🙌
+no	❌ 👎 🙅
+maybe	🤷 🤔
+agree	🤝 👍
+disagree	👎 🙅
+understood	🫡 👍
+salute	🫡
+respect	🫡 🙏
+praying	🙏
+namaste	🙏 🪷
+high five	🙌 ✋
+hands up	🙌
+celebrate	🙌 🎉
+praise	🙌 👏
+clap	👏
+applause	👏 🎉
+wave	👋
+stop	✋ 🛑
+wait	✋ ⏳
+peace	✌️ 🕊️
+victory	✌️ 🏆
+rock on	🤘 🎸
+love hands	🫶
+finger heart	🫰
+pointing up	☝️ 👆
+point down	👇
+point left	👈
+point right	👉
+come here	🫴 👋
+fist bump	👊 🤜🤛
+punch	👊 💥
+strong	💪
+muscle	💪 🏋️
+flex	💪 😎
+crossed fingers	🤞
+fingers crossed	🤞 🍀
+shh	🤫
+silence	🤐 🤫
+secret	🤫 🤐
+bow	🙇
+handshake	🤝
+writing	✍️
+call me	🤙
+rock paper scissors	✊ ✋ ✌️
+animal	🐾 🐻
+dog	🐶 🐕 🦮
+puppy	🐶 🐕
+cat	🐱 🐈 😺
+kitten	🐱 😻
+meow	😺 🐈
+pet	🐾 🐶 🐱
+paw	🐾
+paws	🐾
+rabbit	🐰 🐇
+bunny	🐰 🐇
+hamster	🐹
+mouse	🐭 🐁
+rat	🐀
+fox	🦊
+wolf	🐺
+bear	🐻
+panda	🐼
+koala	🐨
+lion	🦁
+tiger	🐯 🐅
+leopard	🐆
+monkey	🐵 🐒
+gorilla	🦍
+elephant	🐘
+giraffe	🦒
+zebra	🦓
+horse	🐴 🐎
+unicorn	🦄
+cow	🐮 🐄
+buffalo	🐃
+pig	🐷 🐖
+sheep	🐑
+goat	🐐
+deer	🦌
+camel	🐪 🐫
+llama	🦙
+kangaroo	🦘
+penguin	🐧
+chicken	🐔 🐓
+chick	🐥 🐣
+duck	🦆
+eagle	🦅
+owl	🦉
+parrot	🦜
+peacock	🦚
+flamingo	🦩
+dove	🕊️
+swan	🦢
+fish	🐟 🐠
+shark	🦈
+dolphin	🐬
+whale	🐳 🐋
+octopus	🐙
+crab	🦀
+lobster	🦞
+shrimp	🦐
+turtle	🐢
+snake	🐍
+crocodile	🐊
+frog	🐸
+lizard	🦎
+butterfly	🦋
+bee	🐝
+honeybee	🐝 🍯
+ant	🐜
+spider	🕷️ 🕸️
+ladybug	🐞
+snail	🐌
+worm	🪱
+dinosaur	🦖 🦕
+dragon	🐉 🐲
+bat	🦇
+mosquito	🦟
+food	🍽️ 🍔 🍕
+hungry	🍔 🍟 😋
+yummy	😋 🤤
+delicious	🤤 😋 🍽️
+tasty	😋 🍜
+breakfast	🍳 🥞 🥐
+lunch	🍱 🥗 🍛
+dinner	🍽️ 🍲
+snack	🍿 🍪
+pizza	🍕
+burger	🍔
+hamburger	🍔
+fries	🍟
+french fries	🍟
+sandwich	🥪
+hot dog	🌭
+taco	🌮
+burrito	🌯
+noodles	🍜
+ramen	🍜
+spaghetti	🍝
+pasta	🍝
+rice	🍚 🍙
+curry	🍛
+sushi	🍣 🍱
+dumplings	🥟
+bread	🍞 🥖
+croissant	🥐
+cake	🎂 🍰
+birthday cake	🎂
+cupcake	🧁
+cookie	🍪
+biscuit	🍪
+chocolate	🍫
+candy	🍬 🍭
+lollipop	🍭
+ice cream	🍦 🍨
+donut	🍩
+doughnut	🍩
+popcorn	🍿
+cheese	🧀
+egg	🥚 🍳
+chicken food	🍗 🍖
+meat	🥩 🍖
+steak	🥩
+bacon	🥓
+salad	🥗
+vegetables	🥦 🥕 🌽
+carrot	🥕
+potato	🥔
+corn	🌽
+broccoli	🥦
+avocado	🥑
+tomato	🍅
+cucumber	🥒
+mushroom	🍄
+chili	🌶️
+pepper	🫑 🌶️
+onion	🧅
+garlic	🧄
+lemon	🍋
+lime	🍋
+apple	🍎 🍏
+banana	🍌
+orange	🍊
+mango	🥭
+grapes	🍇
+watermelon	🍉
+strawberry	🍓
+cherry	🍒
+peach	🍑
+pineapple	🍍
+coconut	🥥
+kiwi	🥝
+blueberries	🫐
+pear	🍐
+coconut water	🥥 💧
+coffee	☕
+tea	🍵 🫖
+milk	🥛
+water	💧 🚰
+juice	🧃 🥤
+bubble tea	🧋
+soda	🥤
+beer	🍺
+wine	🍷
+champagne	🥂 🍾
+cocktail	🍸 🍹
+ice	🧊
+honey	🍯
+salt	🧂
+sun	☀️ 🌞
+sunny	☀️ 🌤️
+sunshine	☀️ 🌻
+moon	🌙 🌕
+full moon	🌕
+crescent moon	🌙
+stars	⭐ 🌟 ✨
+star	⭐ 🌟
+sparkle	✨ 🌟
+galaxy	🌌 🌠
+space	🚀 🌌
+sky	🌌 ☁️
+cloud	☁️
+cloudy	☁️ 🌥️
+rain	🌧️ ☔
+rainy	🌧️ 🌦️
+umbrella	☂️ ☔
+storm	⛈️ 🌩️
+thunder	🌩️ ⚡
+lightning	⚡ 🌩️
+snow	❄️ 🌨️
+snowflake	❄️
+snowman	☃️ ⛄
+cold	🥶 ❄️
+hot	🥵 🔥
+fire	🔥
+flame	🔥
+wind	💨 🌬️
+tornado	🌪️
+rainbow	🌈
+ocean	🌊 🐬
+sea	🌊 🐚
+wave	🌊
+beach	🏖️ 🌴
+island	🏝️ 🌴
+mountain	⛰️ 🏔️
+volcano	🌋
+desert	🏜️
+forest	🌲 🌳
+tree	🌳 🌲
+palm tree	🌴
+leaves	🍃 🍂
+autumn	🍂 🍁
+flower	🌸 🌺 💐
+flowers	💐 🌷 🌹
+rose	🌹
+red rose	🌹
+tulip	🌷
+sunflower	🌻
+cherry blossom	🌸
+hibiscus	🌺
+lotus	🪷
+bouquet	💐
+plant	🪴 🌱
+seedling	🌱
+grass	🌱 🌿
+herb	🌿
+cactus	🌵
+four leaf clover	🍀
+clover	☘️ 🍀
+earth	🌍 🌎 🌏
+world	🌎 🌍
+planet	🪐 🌍
+meteor	☄️
+comet	☄️ 🌠
+sunrise	🌅
+sunset	🌇 🌆
+night	🌙 🌃
+morning	🌅 ☀️
+waterfall	💦 🌊
+water drops	💦 💧
+car	🚗 🚘
+driving	🚗 🛣️
+taxi	🚕
+cab	🚕
+bus	🚌
+school bus	🚌
+train	🚆 🚄
+metro	🚇
+railway	🚉 🚆
+airplane	✈️ 🛫
+plane	✈️
+flight	✈️ 🛫
+airport	🛫 🛬
+helicopter	🚁
+rocket	🚀
+bicycle	🚲
+bike	🏍️ 🚲
+motorcycle	🏍️
+scooter	🛵
+traffic	🚦 🚗
+traffic light	🚦
+road	🛣️
+highway	🛣️ 🚗
+boat	🚤 ⛵
+ship	🚢
+cruise	🚢 🌊
+sailboat	⛵
+anchor	⚓
+fuel	⛽
+parking	🅿️
+map	🗺️
+location	📍
+pin	📌 📍
+compass	🧭
+directions	🧭 🗺️
+hotel	🏨
+home	🏠 🏡
+house	🏠 🏡
+building	🏢
+office	🏢 💼
+school	🏫 📚
+college	🎓 🏫
+university	🎓
+hospital	🏥
+pharmacy	💊 🏥
+bank	🏦
+ATM	🏧
+shop	🛍️ 🏬
+shopping	🛍️ 🛒
+supermarket	🛒 🏪
+restaurant	🍽️
+cafe	☕ 🥐
+cinema	🎬 🎥
+movie theater	🎦 🎬
+park	🏞️ 🌳
+zoo	🦁 🦒
+amusement park	🎡 🎢
+roller coaster	🎢
+beach vacation	🏖️ 🌴
+vacation	🏝️ ✈️
+holiday	🎉 🏖️
+travel	✈️ 🌍
+trip	🧳 ✈️
+suitcase	🧳
+passport	🛂 🛃
+luggage	🧳
+tent	⛺
+camping	🏕️ 🔥
+mountain climbing	🧗 🏔️
+sport	🏆 ⚽
+football	⚽
+soccer	⚽
+cricket	🏏
+cricket bat	🏏
+basketball	🏀
+baseball	⚾
+tennis	🎾
+badminton	🏸
+volleyball	🏐
+rugby	🏉
+golf	⛳ 🏌️
+hockey	🏒 🏑
+boxing	🥊
+martial arts	🥋
+wrestling	🤼
+swimming	🏊
+surfing	🏄 🌊
+running	🏃
+jogging	🏃
+walking	🚶
+gym	🏋️ 💪
+workout	💪 🏋️
+fitness	💪 🏃
+lifting	🏋️
+yoga	🧘
+meditation	🧘 🪷
+cycling	🚴 🚲
+climbing	🧗
+skiing	🎿
+skating	⛸️ 🛼
+skateboarding	🛹
+dance	💃 🕺
+dancing	💃 🪩
+ballet	🩰
+trophy	🏆
+medal	🏅 🥇
+gold medal	🥇
+silver medal	🥈
+bronze medal	🥉
+first place	🥇 🏆
+winner	🏆 🎉
+champion	🏆 👑
+goal	⚽ 🥅
+referee	🧑‍⚖️ 🏁
+chess	♟️
+dice	🎲
+cards	🃏 🂡
+puzzle	🧩
+video game	🎮
+gaming	🎮 🕹️
+controller	🎮
+arcade	🕹️
+joystick	🕹️
+bowling	🎳
+billiards	🎱
+dart	🎯
+target	🎯
+bullseye	🎯
+music	🎵 🎶
+song	🎵 🎤
+singing	🎤 🎶
+singer	🎤 🎙️
+microphone	🎤
+karaoke	🎤 🎶
+headphones	🎧
+earphones	🎧
+guitar	🎸
+electric guitar	🎸
+piano	🎹
+keyboard instrument	🎹
+drums	🥁
+violin	🎻
+trumpet	🎺
+saxophone	🎷
+flute	🪈
+concert	🎤 🎸 🎶
+band	🎸 🥁
+DJ	🎧 🎛️
+dance party	🪩 🎉
+party	🎉 🥳
+celebration	🎉 🎊
+confetti	🎊 🎉
+balloon	🎈
+balloons	🎈 🎉
+movie	🎬 🎥
+film	🎞️ 🎬
+camera	📷 📸
+photography	📸 📷
+video	📹 🎥
+recording	⏺️ 🎥
+television	📺
+TV	📺
+streaming	📺 ▶️
+popcorn movie	🍿 🎬
+actor	🎭 🎬
+theater	🎭 🎟️
+drama	🎭 😭
+comedy	😂 🎭
+horror	👻 🎃
+ghost	👻
+vampire	🧛
+zombie	🧟
+alien	👽 🛸
+robot	🤖
+clown	🤡
+magician	🪄 🎩
+magic	✨ 🪄
+circus	🎪 🤡
+book	📖 📚
+reading	📚 📖
+library	📚 🏛️
+writing	✍️ 📝
+notebook	📓
+pen	🖊️ ✍️
+pencil	✏️
+art	🎨 🖌️
+painting	🎨
+artist	🎨 🖼️
+drawing	✍️ 🖍️
+design	🎨 ✨
+creativity	💡 🎨
+phone	📱 ☎️
+mobile	📱
+smartphone	📱
+call	📞 ☎️
+telephone	☎️ 📞
+video call	📹 📱
+laptop	💻
+computer	💻 🖥️
+desktop	🖥️
+monitor	🖥️
+keyboard	⌨️
+mouse	🖱️
+printer	🖨️
+battery	🔋
+low battery	🪫
+charging	🔌 🔋
+charger	🔌
+electricity	⚡
+plug	🔌
+wifi	📶
+internet	🌐 📶
+network	📶 🌐
+signal	📶
+no signal	📵 📶
+bluetooth	ᛒ
+settings	⚙️
+gear	⚙️
+tools	🛠️
+repair	🛠️ 🔧
+bug	🐛
+coding	💻 👨‍💻
+programming	💻 👨‍💻
+developer	👨‍💻 💻
+software	💿 💻
+app	📱
+application	📱
+download	⬇️ 📥
+upload	⬆️ 📤
+file	📄 📁
+folder	📁
+document	📄
+pdf	📄
+email	📧 ✉️
+mail	✉️ 📩
+message	💬 📨
+chat	💬 🗨️
+texting	💬 📱
+notification	🔔
+alarm	⏰ 🔔
+lock	🔒
+unlock	🔓
+password	🔑 🔒
+key	🔑
+privacy	🔐
+security	🛡️ 🔒
+shield	🛡️
+search	🔍
+magnifying glass	🔎 🔍
+cloud storage	☁️ 💾
+save	💾
+disk	💽 💾
+database	🗄️
+AI	🤖 🧠
+artificial intelligence	🤖 🧠
+science	🔬 🧪
+experiment	🧪 🔬
+microscope	🔬
+telescope	🔭
+satellite	🛰️
+GPS	📍 🛰️
+work	💼 🧑‍💻
+job	💼 🧑‍💼
+business	💼 📈
+meeting	👥 🗓️
+deadline	⏰ 📅
+busy	🏃 💼
+working	💻 💼
+boss	👔 💼
+employee	🧑‍💼
+salary	💰 💵
+money	💰 💵 💸
+study	📚 ✍️
+studying	📚 📝
+student	🎓 📚
+teacher	👩‍🏫 👨‍🏫
+professor	👨‍🏫 🎓
+classroom	🏫 🧑‍🏫
+homework	📝 📚
+assignment	📝 📄
+exam	📝 📚
+test	📝 ✔️
+examination	📝 📚
+result	📊 🏆
+pass	✅ 🎉
+failed	❌ 😞
+success	🏆 🎉
+successful	🏆 💯
+achievement	🏆 🥇
+goal achieved	🎯 🏆
+graduation	🎓 🎉
+degree	🎓 📜
+certificate	📜 🏅
+diploma	🎓 📜
+books	📚 📖
+notes	📝 📒
+ruler	📏
+calculator	🧮
+mathematics	➗ ➕ 🧮
+plus	➕
+minus	➖
+multiply	✖️
+divide	➗
+chemistry	🧪 ⚗️
+biology	🧬 🧫
+DNA	🧬
+physics	⚛️ 🔬
+atom	⚛️
+history	📜 🏛️
+geography	🌍 🗺️
+language	🗣️ 📚
+English	🔤 📚
+dictionary	📖 🔤
+grammar	✍️ 📚
+question	❓
+answer	💬 ✅
+idea	💡
+brainstorm	💡 🧠
+knowledge	🧠 📚
+research	🔬 📚
+project	📋 💻
+presentation	📊 🖥️
+chart	📊
+graph	📈 📉
+statistics	📊 🧮
+calendar	📅
+schedule	🗓️ ⏰
+checklist	☑️ 📋
+task completed	✅ 🎉
+cash	💵 💶
+dollar	💵 💲
+rupee	₹ 💵
+currency	💱 💵
+rich	🤑 💰
+millionaire	💰 🤑
+billionaire	💰 💎
+broke	💸 😭
+expensive	💸 💎
+cheap	🏷️ 💰
+discount	🏷️ 💸
+sale	🛍️ 🏷️
+offer	🏷️ 🎁
+shopping cart	🛒
+basket	🧺 🛒
+buy	🛍️ 💳
+purchase	🛒 💳
+sell	💰 🏷️
+sold	💰 ✅
+price	🏷️ 💰
+bill	🧾 💵
+receipt	🧾
+invoice	🧾 📄
+wallet	👛 💳
+purse	👛
+credit card	💳
+debit card	💳
+savings	🏦 💰
+investment	📈 💰
+stocks	📈 📉
+profit	📈 💰
+loss	📉 💸
+business growth	📈 🚀
+entrepreneur	💼 🚀
+startup	🚀 💻
+marketing	📢 📈
+advertisement	📢
+package	📦
+delivery	🚚 📦
+shipping	🚢 📦
+gift	🎁
+present	🎁 🎀
+free	🆓 🎁
+lucky	🍀 🤞
+health	🩺 ❤️
+doctor	🧑‍⚕️ 🩺
+nurse	👩‍⚕️ 👨‍⚕️
+medicine	💊 🩺
+pill	💊
+injection	💉
+vaccine	💉 🩺
+thermometer	🌡️
+sneeze	🤧
+cough	😷 🤧
+mask	😷
+bandage	🩹
+injury	🤕 🩹
+broken bone	🦴 🩹
+blood	🩸
+heart health	❤️ 🩺
+heartbeat	💓 ❤️
+brain	🧠
+lungs	🫁
+tooth	🦷
+dentist	🦷 🪥
+toothbrush	🪥
+soap	🧼
+wash	🧼 💧
+shower	🚿
+bath	🛁
+sleep	😴 💤
+insomnia	😵‍💫 🌙
+dream	💭 🌙
+relax	😌 🛀
+mental health	🧠 💚
+healthy food	🥗 🍎
+water reminder	💧 🚰
+exercise	🏋️ 🏃
+muscle pain	💪 😣
+recovery	❤️‍🩹 🌱
+clothes	👕 👗
+shirt	👕
+t-shirt	👕
+jeans	👖
+pants	👖
+dress	👗
+skirt	👗
+coat	🧥
+jacket	🧥
+shoes	👟 👞
+sneakers	👟
+boots	👢
+high heels	👠
+sandals	🩴 👡
+slippers	🩴
+socks	🧦
+hat	🎩 👒
+cap	🧢
+crown	👑
+sunglasses	🕶️
+glasses	👓
+watch	⌚
+necklace	📿 💎
+earrings	💎
+diamond	💎
+handbag	👜 👛
+backpack	🎒
+fashion	👗 ✨
+stylish	😎 👗
+beauty	💄 ✨
+makeup	💄 💋
+lipstick	💄
+nail polish	💅
+manicure	💅
+hair	💇 💈
+haircut	💇 ✂️
+barber	💈 ✂️
+perfume	🧴 ✨
+mirror	🪞
+birthday	🎂 🎉 🥳
+birthday party	🎂 🎈 🎉
+new year	🎆 🥳
+happy new year	🎉 🎆 🥂
+christmas	🎄 🎅 🎁
+santa	🎅 🎄
+christmas tree	🎄
+halloween	🎃 👻
+pumpkin	🎃
+valentine	💘 ❤️ 🌹
+valentines day	💘 🌹 💕
+festival	🎉 🪔
+diya	🪔
+diwali	🪔 🪷 🎆
+holi	🎨 🌈
+rakhi	🎀 ❤️
+raksha bandhan	🎀 ❤️
+independence day	🇮🇳 🎆
+republic day	🇮🇳 🎉
+flag	🚩 🏳️
+India	🇮🇳
+cricket world cup	🏏 🏆
+baby shower	🍼 🎁
+new baby	👶 🍼
+fireworks	🎆 🎇
+confetti	🎊
+party popper	🎉
+check	✔️ ✅
+tick	✔️ ✅
+correct	✅ ✔️
+done	✅ ☑️
+complete	✅ ✔️
+wrong	❌ 🚫
+cross	❌ ✖️
+cancel	❌ 🚫
+prohibited	🚫 ⛔
+warning	⚠️ 🚨
+alert	🚨 ⚠️
+danger	☠️ ⚠️
+emergency	🚨 🆘
+help	🆘 🙏
+information	ℹ️
+question mark	❓
+exclamation	❗
+important	❗ 📌
+attention	⚠️ 👀
+bookmark	🔖
+link	🔗
+chain	🔗
+infinity	♾️
+recycle	♻️
+environment	🌱 ♻️
+no entry	⛔
+stop sign	🛑
+mute	🔇
+volume	🔊
+loud	🔊 📢
+speaker	🔈 🔊
+bell	🔔
+bell off	🔕
+alarm clock	⏰
+timer	⏱️
+stopwatch	⏱️
+clock	🕒 ⏰
+repeat	🔁
+refresh	🔄
+shuffle	🔀
+play	▶️
+pause	⏸️
+record	⏺️
+fast forward	⏩
+rewind	⏪
+next	⏭️
+previous	⏮️
+up	⬆️
+down	⬇️
+left	⬅️
+right	➡️
+arrows	↔️ ↕️
+increase	📈 ⬆️
+decrease	📉 ⬇️
+equal	🟰
+copyright	©️
+registered	®️
+trademark	™️
+heart symbol	❤️
+star symbol	⭐
+check mark	✔️
+red flag	🚩
+green flag	🟢 🏁
+white flag	🏳️
+black flag	🏴
+rainbow flag	🏳️‍🌈
+i love you	❤️ 🥹 💕
+i miss you	🥺 ❤️ 🫂
+i am sorry	🥺 🙏 😔
+thank you so much	🥹 🙏 ❤️
+good morning dear	🌞 ❤️ 🌸
+good night dear	🌙 ❤️ 😘
+take care of yourself	🫂 ❤️ 🤗
+see you tomorrow	👋 📅 😊
+i am happy	😊 😁 🎉
+i am sad	😔 😢 💔
+i am angry	😡 😤 🤬
+i am tired	😴 🥱 😩
+i am hungry	🍔 😋 🍕
+i am sleepy	😴 💤 🌙
+i am confused	🤔 😕 🫤
+that is funny	😂 🤣 😆
+that is amazing	🤩 🔥 ✨
+that is beautiful	😍 ✨ 🌹
+that is cute	🥹 🥰 💗
+that is crazy	🤯 🤪 💀
+what happened	🤔 😳 ❓
+are you okay	🥺 ❤️ 🫂
+i am fine	😊 👍 ❤️
+no worries	😊 🤗 👍
+all good	👍 ✅ 😊
+well done	👏 🎉 🏆
+you are right	💯 👍 ✅
+i agree	🤝 👍 💯
+i don't know	🤷 🤔
+i understand	🫡 👍 😊
+wait a minute	⏳ ✋
+hurry up	🏃 ⏰
+call me	📞 🤙
+text me	💬 📱
+message me	💬 ✉️
+i am busy	💼 ⏰
+i am working	💻 💼
+i am studying	📚 📝
+i passed	🎉 🏆 ✅
+i failed	😔 ❌
+wish me luck	🤞 🍀
+congratulations to you	🎉 🥳 👏
+happy birthday to you	🎂 🎉 🥳
+happy anniversary to you	💕 💐 🎉
+let's go	🚀 🔥 🙌
+let's eat	🍽️ 😋
+let's party	🥳 🎉 🪩
+let's travel	✈️ 🌍 🧳
+let's play	🎮 🏀 🎲
+i am coming	🚶 🏃
+on my way	🚗 📍
+reached home	🏠 ✅
+i am home	🏡 ❤️
+miss those days	🥹 💭 ❤️
+memories	📸 💭 🥹
+best friends	🫂 ❤️ 👫
+friendship	🫂 🤝 💛
+bestie	🫶 💕 🥹
+bro	🤜🤛 😎
+dude	😎 🤙
+legend	🐐 👑 🔥
+goat	🐐 🏆
+king	👑 🤴
+queen	👑 👸
+slay	💅 🔥 👑
+savage	😈 🔥 😎
+lit	🔥 🎉
+no cap	🧢 💯
+facts	💯 ✅
+relatable	😭 💀
+crying laughing	😂 😭
+laughing so hard	🤣 💀
+my heart	❤️ 🥹
+forever and always	♾️ ❤️
+stay strong	💪 ❤️
+never give up	💪 🔥
+trust the process	💯 🌱
+keep going	💪 🚀
+dream big	💭 ✨
+believe in yourself	💪 ❤️
+good vibes only	✨ 🌈 ☀️
+positive energy	☀️ ✨ 💛
+peace out	✌️ 🕊️
+god bless you	🙏 😇
+praying for you	🙏 ❤️
+get well soon	🩹 ❤️ 🌷
+feel better	🫂 ❤️
+sleep well	🌙 😴
+sweet dreams	🌙 💭 💤
+see you later	👋 😊
+bye bye	👋 🥹
+love and hugs	❤️ 🫂
+kisses and hugs	😘 🫂
+xoxo	💋 ❤️
+forever yours	❤️ 🔐 ♾️
+boy	👦 🧒
+boys	👦 🧒
+girl	👧 👩
+girls	👧 👩
+man	👨 🧔
+men	👨 👥
+woman	👩 👱‍♀️
+women	👩 👥
+baby	👶 🍼
+babies	👶 🍼
+kid	🧒 👦 👧
+kids	🧒 👦 👧
+child	🧒 👶
+children	🧒 👦 👧
+guy	👦 👨
+guys	👥 👦 👨
+dude	🧔 👨 😎
+lady	👩 👱‍♀️
+ladies	👩 👯‍♀️
+person	🧑 👤
+people	👥 🧑‍🤝‍🧑
+family	👨‍👩‍👦 👪 👨‍👩‍👧
+father	👨 🧔
+dad	👨 🧔
+daddy	👨 🧔
+mother	👩 🤱
+mom	👩 🤱
+mommy	👩 🤱
+mum	👩 🤱
+parent	👪 🧑‍🍼
+parents	👪 🧑‍🍼
+brother	👦 🧔
+bro	👦 👊
+sister	👧 👩
+sis	👧 👩
+friend	🧑‍🤝‍🧑 🫂
+friends	🧑‍🤝‍🧑 👥 🫂
+knife	🔪 🗡️
+knives	🔪 🗡️
+sword	⚔️ 🗡️
+swords	⚔️ 🗡️
+dagger	🗡️ 🔪
+blade	🗡️ 🔪
+shield	🛡️ ⚔️
+bow	🏹
+arrow	🏹 ➡️
+gun	🔫
+pistol	🔫
+bomb	💣 💥
+axe	🪓
+hammer	🔨 🛠️
+wrench	🔧 🛠️
+screwdriver	🪛 🛠️
+toolbox	🧰 🛠️
+saw	🪚
+drill	🔩
+plate	🍽️ 🥏
+plates	🍽️
+dish	🍽️ 🥣
+dishes	🍽️
+cup	☕ 🥤 🏆
+cups	☕ 🥤 🏆
+mug	☕ 🍺
+mugs	☕ 🍻
+glass	🥛 🍷 🥃
+glasses	👓 🕶️ 🥂
+bottle	🍾 🍼 🫙
+bottles	🍾 🍶
+bowl	🥣 🍲
+bowls	🥣
+spoon	🥄
+spoons	🥄
+fork	🍴 🍽️
+forks	🍴
+cutlery	🍴 🥄 🔪
+chopsticks	🥢
+pot	🍲 🫕 🪴
+pan	🍳 🥘
+kettle	🫖 ☕
+teapot	🫖 🍵
+straw	🥤
+napkin	🧻 🍽️
+shirt	👕
+pants	👖
+jeans	👖
+dress	👗
+skirt	👗
+jacket	🧥
+coat	🧥
+shoes	👟 👞 👠
+sneakers	👟
+heels	👠
+boots	👢
+socks	🧦
+hat	🧢 🎩 👒
+hats	🧢 🎩
+cap	🧢
+bag	👜 🎒
+backpack	🎒
+wallet	👛 💵
+umbrella	☂️ 🌂 ☔
+bed	🛏️ 🛌
+chair	🪑
+chairs	🪑
+sofa	🛋️
+couch	🛋️
+table	🪵 🍽️
+lamp	💡 🛋️
+light	💡 ✨
+bulb	💡
+candle	🕯️
+candles	🕯️
+mirror	🪞
+toilet	🚽
+shower	🚿
+bath	🛁
+soap	🧼
+towel	🧖 🧺
+door	🚪
+window	🪟
+key	🔑 🗝️
+keys	🔑 🗝️
+lock	🔒 🔐
+bell	🔔 🛎️
+paper	📄 📜 📝
+letter	✉️ 📩 💌
+mail	✉️ 📫 📧
+envelope	✉️ 📨
+box	📦 🎁
+boxes	📦
+package	📦 🎁
+calendar	📅 🗓️
+note	📝 🗒️
+notes	📝 🗒️
+clipboard	📋
+folder	📁 📂
+pin	📌 📍
+scissors	✂️
+trash	🗑️ 🚮
+battery	🔋
+guitar	🎸
+piano	🎹
+drum	🥁
+drums	🥁
+violin	🎻
+wolf	🐺
+wolves	🐺
+fox	🦊
+deer	🦌
+zebra	🦓
+giraffe	🦒
+elephant	🐘
+rhino	🦏
+hippo	🦛
+camel	🐪 🐫
+kangaroo	🦘
+koala	🐨
+bat	🦇
+eagle	🦅
+parrot	🦜
+peacock	🦚
+flamingo	🦩
+swan	🦢
+crab	🦀
+lobster	🦞
+shrimp	🦐
+squid	🦑
+snail	🐌
+ant	🐜
+mosquito	🦟
+worm	🪱
+scorpion	🦂
+dinosaur	🦖 🦕
+garlic	🧄
+onion	🧅
+carrot	🥕
+broccoli	🥦
+cucumber	🥒
+pepper	🌶️ 🫑
+chili	🌶️ 🔥
+ginger	🫚
+mushroom	🍄
+mushrooms	🍄
+peanut	🥜
+peanuts	🥜
+coconut	🥥
+peach	🍑
+pear	🍐
+kiwi	🥝
+berry	🫐 🍓
+berries	🫐 🍓
+blueberry	🫐
+pancake	🥞
+pancakes	🥞
+bacon	🥓
+honey	🍯 🐝
+butter	🧈
