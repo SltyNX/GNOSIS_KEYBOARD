@@ -75,7 +75,24 @@ class TypingStatisticsRepository(private val storageDir: File) {
         listeners.remove(listener)
     }
 
+    private val persistHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var persistScheduled = false
+    private val persistRunnable = Runnable {
+        executor.execute {
+            synchronized(this) {
+                if (!isDirty) {
+                    persistScheduled = false
+                    return@synchronized
+                }
+                saveToDiskInternal()
+                isDirty = false
+                persistScheduled = false
+            }
+        }
+    }
+
     private fun notifyListeners() {
+        if (listeners.isEmpty()) return
         for (l in listeners) {
             try {
                 l.invoke()
@@ -270,22 +287,28 @@ class TypingStatisticsRepository(private val storageDir: File) {
     fun clearAllStats() {
         records.clear()
         isDirty = true
-        schedulePersist()
+        persistHandler.removeCallbacks(persistRunnable)
+        persistScheduled = false
+        executor.execute {
+            synchronized(this) {
+                saveToDiskInternal()
+                isDirty = false
+            }
+        }
         notifyListeners()
     }
 
     private fun schedulePersist() {
-        executor.execute {
-            synchronized(this) {
-                if (!isDirty) return@synchronized
-                saveToDiskInternal()
-                isDirty = false
-            }
+        if (!persistScheduled) {
+            persistScheduled = true
+            persistHandler.postDelayed(persistRunnable, 4000L)
         }
     }
 
     @Synchronized
     fun flush() {
+        persistHandler.removeCallbacks(persistRunnable)
+        persistScheduled = false
         if (isDirty) {
             saveToDiskInternal()
             isDirty = false

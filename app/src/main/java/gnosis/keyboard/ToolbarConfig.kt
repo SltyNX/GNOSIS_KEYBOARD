@@ -14,7 +14,7 @@ object ToolbarConfig {
     const val IME_QUICK_EDIT = "gnosis.quickkey_edit"
     const val IME_PREVIEW = "gnosis.preview"
 
-    val ALL_IDS = listOf("mic", "clip", "edit", "float", "resize", "settings")
+    val ALL_IDS = listOf("mic", "clip", "fonts", "split", "float", "resize", "settings")
 
     val DEFAULT_QUICK = listOf(".", ",", "?")
 

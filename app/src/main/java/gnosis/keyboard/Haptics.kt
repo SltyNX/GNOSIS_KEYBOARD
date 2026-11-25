@@ -56,6 +56,38 @@ object Haptics {
         vibrate(ctx, pressure)
     }
 
+    /**
+     * Produces a crisp, precise micro-tick for granular gestures (e.g. spacebar cursor scrolling).
+     * Replicates physical hardware dial/detent resistance.
+     */
+    fun tick(ctx: Context, view: View? = null) {
+        if (view != null && view.isAttachedToWindow) {
+            val viewTick = when {
+                Build.VERSION.SDK_INT >= 34 -> view.performHapticFeedback(HapticFeedbackConstants.SEGMENT_TICK)
+                Build.VERSION.SDK_INT >= 27 -> view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                else -> view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            }
+            if (viewTick) return
+        }
+        val v = vibrator(ctx)?.takeIf { it.hasVibrator() } ?: return
+        if (Build.VERSION.SDK_INT >= 30 && v.areAllPrimitivesSupported(VibrationEffect.Composition.PRIMITIVE_TICK)) {
+            val effect = VibrationEffect.startComposition()
+                .addPrimitive(VibrationEffect.Composition.PRIMITIVE_TICK, 0.45f)
+                .compose()
+            v.vibrate(effect)
+            return
+        }
+        val fallbackEffect = VibrationEffect.createOneShot(4L, 45)
+        if (Build.VERSION.SDK_INT >= 33) {
+            val attrs = VibrationAttributes.Builder()
+                .setUsage(VibrationAttributes.USAGE_TOUCH)
+                .build()
+            v.vibrate(fallbackEffect, attrs)
+        } else {
+            v.vibrate(fallbackEffect)
+        }
+    }
+
     private fun performOnView(view: View, pressure: Int): Boolean {
         val constant = when {
             pressure <= 40 -> HapticFeedbackConstants.KEYBOARD_TAP

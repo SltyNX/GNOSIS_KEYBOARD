@@ -9,6 +9,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
 data class RemoteFontInfo(
@@ -27,6 +28,8 @@ object FontExtensionManager {
 
     private const val GITHUB_RAW_BASE =
         "https://raw.githubusercontent.com/SltyNX/Gnosis-Keyboard-Data/main/fonts/"
+
+    private val typefaceCache = ConcurrentHashMap<String, Typeface>()
 
     fun getFontsDir(context: Context): File {
         val dir = File(context.filesDir, "fonts")
@@ -58,25 +61,50 @@ object FontExtensionManager {
 
     fun deleteFont(context: Context, filename: String): Boolean {
         val file = File(getFontsDir(context), filename)
+        typefaceCache.remove(filename)
+        typefaceCache.remove("$filename-bold")
+        typefaceCache.remove("$filename-normal")
         return file.exists() && file.delete()
     }
 
     fun getTypeface(context: Context, fontFilename: String, bold: Boolean = false): Typeface? {
+        val cacheKey = "$fontFilename-${if (bold) "b" else "n"}"
+        typefaceCache[cacheKey]?.let { return it }
+
         val styleInt = if (bold) Typeface.BOLD else Typeface.NORMAL
-        val file = File(getFontsDir(context), fontFilename)
+        val dir = getFontsDir(context)
+        val file = File(dir, fontFilename)
         if (file.exists()) {
             return try {
                 val tf = Typeface.createFromFile(file)
-                Typeface.create(tf, styleInt)
+                val styled = Typeface.create(tf, styleInt)
+                if (styled != null) typefaceCache[cacheKey] = styled
+                styled
             } catch (_: Exception) {
                 null
             }
         }
-        val withExt = File(getFontsDir(context), "$fontFilename.ttf")
+        val withExt = File(dir, "$fontFilename.ttf")
         if (withExt.exists()) {
             return try {
                 val tf = Typeface.createFromFile(withExt)
-                Typeface.create(tf, styleInt)
+                val styled = Typeface.create(tf, styleInt)
+                if (styled != null) typefaceCache[cacheKey] = styled
+                styled
+            } catch (_: Exception) {
+                null
+            }
+        }
+        val match = dir.listFiles()?.firstOrNull {
+            it.name.equals(fontFilename, ignoreCase = true) ||
+            it.nameWithoutExtension.equals(fontFilename.removeSuffix(".ttf").removeSuffix(".otf"), ignoreCase = true)
+        }
+        if (match != null && match.exists()) {
+            return try {
+                val tf = Typeface.createFromFile(match)
+                val styled = Typeface.create(tf, styleInt)
+                if (styled != null) typefaceCache[cacheKey] = styled
+                styled
             } catch (_: Exception) {
                 null
             }

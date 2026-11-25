@@ -1,6 +1,8 @@
 package gnosis.keyboard
 
+import android.app.AlarmManager
 import android.app.Dialog
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -12,7 +14,9 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
@@ -37,9 +41,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
+import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import gnosis.keyboard.engine.EngineFactory
+import gnosis.keyboard.engine.GnosisEngine
 import gnosis.keyboard.engine.language.GnosisLanguageManager
 import gnosis.keyboard.stats.TypingStatisticsRepository
 import gnosis.keyboard.ui.ConceptComponents
@@ -66,10 +71,12 @@ class MainActivity : ComponentActivity() {
         const val TARGET_LANGUAGES = "languages"
         const val TARGET_STATS = "stats"
         const val TARGET_TYPING = "typing"
+        const val TARGET_AI = "ai_intelligence"
         const val TARGET_APPEARANCE = "appearance"
         const val TARGET_THEMES = "themes"
         const val TARGET_SEARCH = "search"
         const val TARGET_ONBOARDING = "onboarding"
+        const val TARGET_CLIPBOARD = "clipboard_snippets"
     }
 
     private lateinit var statsRepo: TypingStatisticsRepository
@@ -89,6 +96,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var contentFrame: FrameLayout
     private lateinit var topBarContainer: LinearLayout
     private lateinit var topBar: LinearLayout
+    private lateinit var topBarProfileBtn: FrameLayout
     private lateinit var topBarTitle: TextView
     private lateinit var backBtn: ImageView
     private lateinit var searchActionBtn: ImageView
@@ -113,6 +121,8 @@ class MainActivity : ComponentActivity() {
 
     private var pendingExportJson: String? = null
 
+    private fun dp(v: Float): Int = (v * resources.displayMetrics.density).toInt()
+
     val exportThemeLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -133,6 +143,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    fun exportTheme() {
+        pendingExportJson = Skins.exportThemeJson(this)
+        exportThemeLauncher.launch("gnosis_theme_${System.currentTimeMillis()}.json")
     }
 
     val importThemeLauncher = registerForActivityResult(
@@ -187,6 +202,7 @@ class MainActivity : ComponentActivity() {
                     file.outputStream().use { output -> input.copyTo(output) }
                 }
                 showToast("Profile photo updated")
+                refreshTopBarProfile()
                 if (currentTab == "home" && navStack.isEmpty() && subScreenScrollContainer.visibility != View.VISIBLE) {
                     openHomeScreen()
                 }
@@ -226,7 +242,10 @@ class MainActivity : ComponentActivity() {
         previewSounds = KeySounds(this)
         initScreens()
 
-        setLauncherIconHidden(Skins.prefs(this).getBoolean(Skins.KEY_HIDE_LAUNCHER_ICON, false))
+        val hideLauncher = Skins.prefs(this).getBoolean(Skins.KEY_HIDE_LAUNCHER_ICON, false)
+        if (hideLauncher) {
+            setLauncherIconHidden(true)
+        }
 
         buildUiTree()
 
@@ -256,30 +275,6 @@ class MainActivity : ComponentActivity() {
 
         openHomeScreen()
         handleIntent(intent)
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (livePreviewDrawer.visibility == View.VISIBLE) {
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.hideSoftInputFromWindow(livePreviewInput.windowToken, 0)
-            livePreviewInput.clearFocus()
-            toggleLivePreviewDrawer(false)
-            return
-        }
-        if (popScreen()) {
-            return
-        }
-        if (currentTab != "home" || (::homePager.isInitialized && homePager.currentPage != 0)) {
-            if (::homePager.isInitialized) {
-                homePager.smoothScrollToPage(0)
-            } else {
-                openHomeScreen()
-            }
-            return
-        }
-        @Suppress("DEPRECATION")
-        super.onBackPressed()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -367,6 +362,7 @@ class MainActivity : ComponentActivity() {
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             isVerticalScrollBarEnabled = false
             clipToPadding = false
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
             visibility = View.GONE
         }
         subScreenContentFrame = FrameLayout(this).apply {
@@ -385,6 +381,7 @@ class MainActivity : ComponentActivity() {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             isVerticalScrollBarEnabled = false
             clipToPadding = false
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         }
         homeContentFrame = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -396,6 +393,7 @@ class MainActivity : ComponentActivity() {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             isVerticalScrollBarEnabled = false
             clipToPadding = false
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         }
         statsContentFrame = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -412,12 +410,18 @@ class MainActivity : ComponentActivity() {
                 currentTab = "stats"
                 currentScreenTitle = "Typing Statistics"
                 topBarTitle.text = currentScreenTitle
+                topBarTitle.visibility = View.VISIBLE
+                topBarProfileBtn.visibility = View.GONE
                 refreshStatsScreen()
             } else {
                 currentTab = "home"
-                currentScreenTitle = "Gnosis Keyboard"
-                topBarTitle.text = currentScreenTitle
+                currentScreenTitle = ""
+                topBarTitle.text = ""
+                topBarTitle.visibility = View.GONE
+                topBarProfileBtn.visibility = View.VISIBLE
+                refreshTopBarProfile()
             }
+            searchActionBtn.visibility = View.GONE
             if (floatingBottomNav != null) {
                 floatingBottomNav?.setSelectedTab(pageIdx, animateBounce = true)
             } else {
@@ -466,8 +470,29 @@ class MainActivity : ComponentActivity() {
         }
         topBar.addView(backBtn)
 
+        topBarProfileBtn = FrameLayout(this).apply {
+            val s = dp(38f)
+            layoutParams = LinearLayout.LayoutParams(s, s).apply {
+                marginEnd = dp(8f)
+            }
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(tokens.accent)
+            }
+            clipToOutline = true
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Profile Photo"
+            ConceptComponents.applyTactileFeedback(this, cornerRadiusDp = 19f, pressScale = 0.92f, tokens = tokens)
+            setOnClickListener {
+                pickProfilePhoto.launch("image/*")
+            }
+        }
+        topBar.addView(topBarProfileBtn)
+
         topBarTitle = TextView(this).apply {
-            text = "Gnosis Keyboard"
+            text = ""
+            visibility = View.GONE
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             setTypeface(null, Typeface.BOLD)
             setTextColor(tokens.textPrimary)
@@ -558,20 +583,46 @@ class MainActivity : ComponentActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { _, insets ->
             val statusBar = insets.getInsets(WindowInsetsCompat.Type.statusBars())
             val navBar = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            lastKnownStatusBarTop = statusBar.top
+            lastKnownNavBarBottom = navBar.bottom
+            lastKnownImeBottom = ime.bottom
 
             topBar.setPadding(dp(16f), statusBar.top + dp(6f), dp(16f), dp(8f))
-            val topBarTotalH = statusBar.top + dp(54f)
-            val bottomPad = navBar.bottom + dp(84f)
-            homeScrollView.setPadding(0, topBarTotalH, 0, bottomPad)
-            statsScrollView.setPadding(0, topBarTotalH, 0, bottomPad)
-            subScreenScrollContainer.setPadding(0, topBarTotalH, 0, bottomPad)
-            bottomNavContainer.setPadding(0, 0, 0, navBar.bottom + dp(8f))
-
+            updateScrollPaddings(imeInset = ime.bottom)
             insets
         }
 
         setContentView(rootLayout)
         renderBottomNav()
+    }
+
+    private var lastKnownImeBottom = 0
+    private var lastKnownNavBarBottom = 0
+    private var lastKnownStatusBarTop = 0
+
+    fun updateScrollPaddings(isLivePreview: Boolean = (::livePreviewDrawer.isInitialized && livePreviewDrawer.visibility == View.VISIBLE), imeInset: Int = lastKnownImeBottom) {
+        val density = resources.displayMetrics.density
+        fun dp(v: Float) = (v * density).toInt()
+        val statusBarTop = lastKnownStatusBarTop
+        val drawerH = if (isLivePreview) dp(56f) else 0
+        val topBarTotalH = statusBarTop + dp(54f) + drawerH
+        val isKeyboardUp = isLivePreview || imeInset > dp(80f)
+        val bottomInset = if (isKeyboardUp) maxOf(imeInset, dp(320f)) else lastKnownNavBarBottom
+        val bottomPad = bottomInset + (if (isKeyboardUp) dp(60f) else dp(84f))
+
+        if (::homeScrollView.isInitialized) homeScrollView.setPadding(0, topBarTotalH, 0, bottomPad)
+        if (::statsScrollView.isInitialized) statsScrollView.setPadding(0, topBarTotalH, 0, bottomPad)
+        if (::subScreenScrollContainer.isInitialized) subScreenScrollContainer.setPadding(0, topBarTotalH, 0, bottomPad)
+
+        if (::bottomNavContainer.isInitialized) {
+            if (isKeyboardUp) {
+                bottomNavContainer.visibility = View.GONE
+            } else {
+                bottomNavContainer.visibility = View.VISIBLE
+                bottomNavContainer.setPadding(0, 0, 0, lastKnownNavBarBottom + dp(8f))
+            }
+        }
     }
 
     private fun renderBottomNav(activeTab: Int = if (currentTab == "stats") 1 else 0) {
@@ -629,6 +680,7 @@ class MainActivity : ComponentActivity() {
             livePreviewInput.requestFocus()
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             imm?.showSoftInput(livePreviewInput, 0)
+            updateScrollPaddings(isLivePreview = true)
         } else if (isVis) {
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             imm?.hideSoftInputFromWindow(livePreviewInput.windowToken, 0)
@@ -639,8 +691,10 @@ class MainActivity : ComponentActivity() {
                 .setDuration(170L)
                 .withEndAction {
                     livePreviewDrawer.visibility = View.GONE
+                    updateScrollPaddings(isLivePreview = false)
                 }
                 .start()
+            updateScrollPaddings(isLivePreview = false)
         }
     }
 
@@ -649,7 +703,7 @@ class MainActivity : ComponentActivity() {
         navStack.clear()
         currentDestinationTag = null
         backBtn.visibility = View.GONE
-        searchActionBtn.visibility = View.VISIBLE
+        searchActionBtn.visibility = View.GONE
         livePreviewBtn.visibility = View.GONE
         livePreviewDrawer.visibility = View.GONE
         bottomNavContainer.visibility = View.VISIBLE
@@ -663,10 +717,13 @@ class MainActivity : ComponentActivity() {
     fun openHomeScreen() {
         currentTab = "home"
         currentDestinationTag = null
-        currentScreenTitle = "Gnosis Keyboard"
-        topBarTitle.text = currentScreenTitle
+        currentScreenTitle = ""
+        topBarTitle.text = ""
+        topBarTitle.visibility = View.GONE
         backBtn.visibility = View.GONE
-        searchActionBtn.visibility = View.VISIBLE
+        topBarProfileBtn.visibility = View.VISIBLE
+        refreshTopBarProfile()
+        searchActionBtn.visibility = View.GONE
         livePreviewBtn.visibility = View.GONE
         livePreviewDrawer.visibility = View.GONE
         bottomNavContainer.visibility = View.VISIBLE
@@ -675,15 +732,27 @@ class MainActivity : ComponentActivity() {
         homePager.visibility = View.VISIBLE
 
         homeContentFrame.removeAllViews()
-        val homeView = screens.buildHomeScreen(
-            onOpenTyping = { pushScreen(screens.buildTypingScreen(), "Typing & Suggestions", "Typing & Suggestions") },
+        homeContentFrame.addView(renderHomeScreenView())
+
+        if (statsContentFrame.childCount == 0) {
+            statsContentFrame.addView(screens.buildTypingStatisticsScreen())
+        }
+
+        homePager.setCurrentPageImmediate(0)
+        renderBottomNav(0)
+    }
+
+    fun renderHomeScreenView(): View {
+        return screens.buildHomeScreen(
+            onOpenAiIntelligence = { pushScreen(screens.buildAiIntelligenceScreen(), "AI Intelligence", "AI Intelligence") },
+            onOpenTyping = { pushScreen(screens.buildTypingScreen(), "Typing & Autocorrect", "Typing & Autocorrect") },
             onOpenAppearance = {
                 pushScreen(
                     screens.buildAppearanceScreen(
                         onOpenThemeGallery = { pushScreen(screens.buildThemeGridScreen(), "Theme Gallery", "Theme Gallery") }
                     ),
-                    "Appearance",
-                    "Appearance"
+                    "Themes & Styling",
+                    "Themes & Styling"
                 )
             },
             onOpenLanguage = {
@@ -712,19 +781,18 @@ class MainActivity : ComponentActivity() {
                     screens.buildAppearanceScreen(
                         onOpenThemeGallery = { pushScreen(screens.buildThemeGridScreen(), "Theme Gallery", "Theme Gallery") }
                     ),
-                    "Appearance",
-                    "Appearance"
+                    "Themes & Styling",
+                    "Themes & Styling"
                 )
-            }
+            },
+            onOpenLayoutToolbar = { pushScreen(screens.buildLayoutToolbarScreen(), "Layout & Toolbar", "Layout & Toolbar") },
+            onOpenFontStore = { pushScreen(screens.buildFontStoreScreen(), "Typography & Font Store", "Typography & Font Store") },
+            onOpenSoundHaptics = { pushScreen(screens.buildSoundHapticsScreen(), "Sound & Haptics", "Sound & Haptics") },
+            onOpenEffectsWallpaper = { pushScreen(screens.buildEffectsWallpaperScreen(), "Effects & Wallpaper", "Effects & Wallpaper") },
+            onOpenClipboardSnippets = { pushScreen(screens.buildClipboardSnippetsScreen(), "Clipboard & Snippets", "Clipboard & Snippets") },
+            onOpenVoice = { pushScreen(screens.buildVoiceScreen(), "Voice Typing", "Voice Typing") },
+            onOpenMaintenance = { pushScreen(screens.buildMaintenanceScreen(), "System & Maintenance", "System & Maintenance") }
         )
-        homeContentFrame.addView(homeView)
-
-        if (statsContentFrame.childCount == 0) {
-            statsContentFrame.addView(screens.buildTypingStatisticsScreen())
-        }
-
-        homePager.setCurrentPageImmediate(0)
-        renderBottomNav(0)
     }
 
     fun openStatsScreen() {
@@ -732,8 +800,10 @@ class MainActivity : ComponentActivity() {
         currentDestinationTag = null
         currentScreenTitle = "Typing Statistics"
         topBarTitle.text = currentScreenTitle
+        topBarTitle.visibility = View.VISIBLE
         backBtn.visibility = View.GONE
-        searchActionBtn.visibility = View.VISIBLE
+        topBarProfileBtn.visibility = View.GONE
+        searchActionBtn.visibility = View.GONE
         livePreviewBtn.visibility = View.GONE
         livePreviewDrawer.visibility = View.GONE
         bottomNavContainer.visibility = View.VISIBLE
@@ -742,49 +812,7 @@ class MainActivity : ComponentActivity() {
         homePager.visibility = View.VISIBLE
 
         if (homeContentFrame.childCount == 0) {
-            val homeView = screens.buildHomeScreen(
-                onOpenTyping = { pushScreen(screens.buildTypingScreen(), "Typing & Suggestions", "Typing & Suggestions") },
-                onOpenAppearance = {
-                    pushScreen(
-                        screens.buildAppearanceScreen(
-                            onOpenThemeGallery = { pushScreen(screens.buildThemeGridScreen(), "Theme Gallery", "Theme Gallery") }
-                        ),
-                        "Appearance",
-                        "Appearance"
-                    )
-                },
-                onOpenLanguage = {
-                    pushScreen(
-                        screens.buildLanguageScreen(
-                            onOpenDictionary = { pushScreen(screens.buildLearnedDataScreen(), "Learned Data", "Learned Data") }
-                        ),
-                        "Language & Dictionary",
-                        "Language & Dictionary"
-                    )
-                },
-                onOpenPersonalization = {
-                    pushScreen(
-                        screens.buildPersonalizationScreen(
-                            onOpenShortcuts = { pushScreen(screens.buildShortcutsScreen(), "Text Shortcuts", "Text Shortcuts") },
-                            onOpenLearnedData = { pushScreen(screens.buildLearnedDataScreen(), "Learned Data", "Learned Data") },
-                            onOpenFavoriteWords = { pushScreen(screens.buildFavoriteWordsScreen(), "Favorite Words", "Favorite Words") }
-                        ),
-                        "Personalization",
-                        "Personalization"
-                    )
-                },
-                onOpenAdvanced = { pushScreen(screens.buildAdvancedScreen(), "Advanced Settings", "Advanced Settings") },
-                onOpenQuickSettings = {
-                    pushScreen(
-                        screens.buildAppearanceScreen(
-                            onOpenThemeGallery = { pushScreen(screens.buildThemeGridScreen(), "Theme Gallery", "Theme Gallery") }
-                        ),
-                        "Appearance",
-                        "Appearance"
-                    )
-                }
-            )
-            homeContentFrame.addView(homeView)
+            homeContentFrame.addView(renderHomeScreenView())
         }
 
         refreshStatsScreen()
@@ -809,12 +837,14 @@ class MainActivity : ComponentActivity() {
         currentScreenTitle = title
         currentDestinationTag = destinationTag
 
+        topBarTitle.visibility = View.VISIBLE
         topBarTitle.text = title
         topBarTitle.alpha = 0f
         topBarTitle.translationY = -resources.displayMetrics.density * 8f
         topBarTitle.animate().alpha(1f).translationY(0f).setDuration(220).start()
 
         backBtn.visibility = View.VISIBLE
+        topBarProfileBtn.visibility = View.GONE
         searchActionBtn.visibility = View.GONE
         livePreviewBtn.visibility = View.VISIBLE
         livePreviewDrawer.visibility = View.GONE
@@ -849,10 +879,10 @@ class MainActivity : ComponentActivity() {
 
     fun renderScreenForTag(tag: String?): View? {
         return when (tag) {
-            "Appearance" -> screens.buildAppearanceScreen(
+            "Appearance", "Themes & Styling", "Appearance & Styling" -> screens.buildAppearanceScreen(
                 onOpenThemeGallery = { pushScreen(screens.buildThemeGridScreen(), "Theme Gallery", "Theme Gallery") }
             )
-            "Typing & Suggestions" -> screens.buildTypingScreen()
+            "Typing & Autocorrect", "Typing & Suggestions" -> screens.buildTypingScreen()
             "Language & Dictionary" -> screens.buildLanguageScreen(
                 onOpenDictionary = { pushScreen(screens.buildLearnedDataScreen(), "Learned Data", "Learned Data") }
             )
@@ -861,6 +891,14 @@ class MainActivity : ComponentActivity() {
                 onOpenLearnedData = { pushScreen(screens.buildLearnedDataScreen(), "Learned Data", "Learned Data") },
                 onOpenFavoriteWords = { pushScreen(screens.buildFavoriteWordsScreen(), "Favorite Words", "Favorite Words") }
             )
+            "Layout & Toolbar" -> screens.buildLayoutToolbarScreen()
+            "Typography & Font Store", "Font Store", "Typography & Fonts Store" -> screens.buildFontStoreScreen()
+            "Sound & Haptics" -> screens.buildSoundHapticsScreen()
+            "Effects & Wallpaper" -> screens.buildEffectsWallpaperScreen()
+            "Clipboard & Snippets" -> screens.buildClipboardSnippetsScreen()
+            "Voice Typing" -> screens.buildVoiceScreen()
+            "System & Maintenance" -> screens.buildMaintenanceScreen()
+            "AI Intelligence" -> screens.buildAiIntelligenceScreen()
             "Advanced Settings" -> screens.buildAdvancedScreen()
             "Theme Gallery" -> screens.buildThemeGridScreen()
             "Search Settings" -> screens.buildSearchSettingsScreen()
@@ -890,17 +928,26 @@ class MainActivity : ComponentActivity() {
         val isRoot = navStack.isEmpty() || prevEntry.destinationTag == null
 
         if (isRoot) {
+            tokens = ConceptDesignTokens.resolve(this)
+            screens.tokens = tokens
             navStack.clear()
             currentDestinationTag = null
-            currentScreenTitle = if (currentTab == "stats" || (::homePager.isInitialized && homePager.currentPage == 1)) "Typing Statistics" else "Gnosis Keyboard"
+            val isStats = (currentTab == "stats" || (::homePager.isInitialized && homePager.currentPage == 1))
+            currentScreenTitle = if (isStats) "Typing Statistics" else ""
 
-            topBarTitle.text = currentScreenTitle
-            topBarTitle.alpha = 0f
-            topBarTitle.translationY = -resources.displayMetrics.density * 8f
-            topBarTitle.animate().alpha(1f).translationY(0f).setDuration(220).start()
+            if (isStats) {
+                topBarTitle.text = currentScreenTitle
+                topBarTitle.visibility = View.VISIBLE
+                topBarProfileBtn.visibility = View.GONE
+            } else {
+                topBarTitle.text = ""
+                topBarTitle.visibility = View.GONE
+                topBarProfileBtn.visibility = View.VISIBLE
+                refreshTopBarProfile()
+            }
 
             backBtn.visibility = View.GONE
-            searchActionBtn.visibility = View.VISIBLE
+            searchActionBtn.visibility = View.GONE
             livePreviewBtn.visibility = View.GONE
 
             bottomNavContainer.visibility = View.VISIBLE
@@ -915,6 +962,10 @@ class MainActivity : ComponentActivity() {
 
             subScreenContentFrame.removeAllViews()
             subScreenScrollContainer.visibility = View.GONE
+            if (::homeContentFrame.isInitialized) {
+                homeContentFrame.removeAllViews()
+                homeContentFrame.addView(renderHomeScreenView())
+            }
             homePager.visibility = View.VISIBLE
             if (currentTab == "stats" || (::homePager.isInitialized && homePager.currentPage == 1)) {
                 renderBottomNav(1)
@@ -926,6 +977,8 @@ class MainActivity : ComponentActivity() {
             currentDestinationTag = prevEntry.destinationTag
 
             topBarTitle.text = prevEntry.title
+            topBarTitle.visibility = View.VISIBLE
+            topBarProfileBtn.visibility = View.GONE
             topBarTitle.alpha = 0f
             topBarTitle.translationY = -resources.displayMetrics.density * 8f
             topBarTitle.animate().alpha(1f).translationY(0f).setDuration(220).start()
@@ -962,15 +1015,89 @@ class MainActivity : ComponentActivity() {
         switchTab(tab)
     }
 
+    fun refreshTopBarProfile() {
+        if (!::topBarProfileBtn.isInitialized) return
+        topBarProfileBtn.removeAllViews()
+
+        val avatarFile = File(filesDir, "user_avatar.jpg")
+        var hasCustomAvatar = false
+        if (avatarFile.exists() && avatarFile.length() > 0) {
+            try {
+                val bmp = BitmapFactory.decodeFile(avatarFile.absolutePath)
+                if (bmp != null) {
+                    val avatarIv = ImageView(this).apply {
+                        val rounded = RoundedBitmapDrawableFactory.create(resources, bmp).apply {
+                            isCircular = true
+                        }
+                        setImageDrawable(rounded)
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    }
+                    topBarProfileBtn.addView(avatarIv)
+                    hasCustomAvatar = true
+                }
+            } catch (_: Exception) {}
+        }
+
+        if (!hasCustomAvatar) {
+            val appIconIv = ImageView(this).apply {
+                val appIcon = try {
+                    packageManager.getApplicationIcon(packageName)
+                } catch (_: Exception) {
+                    ContextCompat.getDrawable(this@MainActivity, R.mipmap.ic_launcher)
+                }
+                setImageDrawable(appIcon)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setPadding(0, 0, 0, 0)
+                layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            }
+            topBarProfileBtn.addView(appIconIv)
+        }
+
+        val editBadge = FrameLayout(this).apply {
+            val bs = dp(14f)
+            layoutParams = FrameLayout.LayoutParams(bs, bs, Gravity.BOTTOM or Gravity.END)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(tokens.surface)
+                setStroke(dp(1f), tokens.cardBorder)
+            }
+            val editIv = ImageView(this@MainActivity).apply {
+                val d = ContextCompat.getDrawable(context, R.drawable.ic_pen_line)?.mutate()
+                d?.setTint(tokens.accent)
+                setImageDrawable(d)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                val p = dp(2.5f)
+                setPadding(p, p, p, p)
+            }
+            addView(editIv)
+        }
+        topBarProfileBtn.addView(editBadge)
+    }
+
     fun reloadTheme() {
         tokens = ConceptDesignTokens.resolve(this)
         applyEdgeToEdgeMode()
         rootLayout.setBackgroundColor(tokens.bg)
         topBar.setBackgroundColor(tokens.topBarBg)
         topBarTitle.setTextColor(tokens.textPrimary)
+        if (::topBarProfileBtn.isInitialized) {
+            topBarProfileBtn.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(tokens.accent)
+            }
+            refreshTopBarProfile()
+        }
         backBtn.drawable?.mutate()?.setTint(tokens.textPrimary)
         searchActionBtn.drawable?.mutate()?.setTint(tokens.textSecondary)
         livePreviewBtn.drawable?.mutate()?.setTint(tokens.accent)
+        if (::topBarProfileBtn.isInitialized) {
+            topBarProfileBtn.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(tokens.accent)
+            }
+            refreshTopBarProfile()
+        }
 
         val density = resources.displayMetrics.density
         backBtn.background = GradientDrawable().apply {
@@ -1004,10 +1131,18 @@ class MainActivity : ComponentActivity() {
         initScreens()
         renderBottomNav()
 
+        if (::homeContentFrame.isInitialized) {
+            homeContentFrame.removeAllViews()
+            homeContentFrame.addView(renderHomeScreenView())
+        }
+
         if (navStack.isEmpty() && subScreenScrollContainer.visibility != View.VISIBLE) {
             when (currentTab) {
                 "stats" -> openStatsScreen()
-                else -> openHomeScreen()
+                else -> {
+                    homePager.visibility = View.VISIBLE
+                    subScreenScrollContainer.visibility = View.GONE
+                }
             }
         } else {
             val view = renderScreenForTag(currentDestinationTag)
@@ -1026,13 +1161,19 @@ class MainActivity : ComponentActivity() {
         val target = intent.getStringExtra(EXTRA_NAVIGATE_TO) ?: return false
         when (target) {
             TARGET_LANGUAGES -> {
-                pushScreen(
-                    screens.buildLanguageScreen(
-                        onOpenDictionary = { pushScreen(screens.buildLearnedDataScreen(), "Learned Data", "Learned Data") }
-                    ),
-                    "Language & Dictionary",
-                    "Language & Dictionary"
-                )
+                if (intent.getBooleanExtra("open_layout_downloader", false)) {
+                    pushScreen(screens.buildLayoutGalleryScreen(), "Layout Gallery", "Layout Gallery")
+                } else if (intent.getBooleanExtra("open_font_store", false)) {
+                    pushScreen(screens.buildFontStoreScreen(), "Typography & Fonts Store", "Typography & Fonts Store")
+                } else {
+                    pushScreen(
+                        screens.buildLanguageScreen(
+                            onOpenDictionary = { pushScreen(screens.buildLearnedDataScreen(), "Learned Data", "Learned Data") }
+                        ),
+                        "Language & Dictionary",
+                        "Language & Dictionary"
+                    )
+                }
                 return true
             }
             TARGET_STATS -> {
@@ -1041,6 +1182,10 @@ class MainActivity : ComponentActivity() {
             }
             TARGET_TYPING -> {
                 pushScreen(screens.buildTypingScreen(), "Typing & Suggestions", "Typing & Suggestions")
+                return true
+            }
+            TARGET_AI -> {
+                pushScreen(screens.buildAiIntelligenceScreen(), "AI Intelligence", "AI Intelligence")
                 return true
             }
             TARGET_APPEARANCE -> {
@@ -1073,8 +1218,36 @@ class MainActivity : ComponentActivity() {
                 pushScreen(screens.buildAdvancedScreen(), "Advanced Settings", "Advanced Settings")
                 return true
             }
+            TARGET_CLIPBOARD -> {
+                pushScreen(screens.buildClipboardSnippetsScreen(), "Clipboard & Snippets", "Clipboard & Snippets")
+                return true
+            }
         }
         return false
+    }
+
+    fun updateAccentColor(accentColor: Int) {
+        val p = Skins.prefs(this)
+        p.edit().putInt(Skins.KEY_ACCENT, accentColor).putInt("settings_accent_color", accentColor).apply()
+        tokens = ConceptDesignTokens.resolve(this)
+        screens.tokens = tokens
+        livePreviewBtn.drawable?.mutate()?.setTint(tokens.accent)
+        if (::topBarProfileBtn.isInitialized) {
+            topBarProfileBtn.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(tokens.accent)
+            }
+            refreshTopBarProfile()
+        }
+        if (::homeContentFrame.isInitialized) {
+            homeContentFrame.removeAllViews()
+            homeContentFrame.addView(renderHomeScreenView())
+        }
+        floatingBottomNav = null
+        renderBottomNav()
+        refreshCurrentScreen()
+        notifySettingsChanged(restart = true)
+        KeyboardService.activeInstance?.restartKeyboard()
     }
 
     fun notifySettingsChanged(restart: Boolean = false, lightUpdate: Boolean = !restart) {
@@ -1085,12 +1258,53 @@ class MainActivity : ComponentActivity() {
             }
             sendBroadcast(intent)
         } catch (_: Exception) {}
+        try {
+            KeyboardService.activeInstance?.let { service ->
+                service.postOnMain {
+                    if (restart) {
+                        service.restartKeyboard()
+                    } else {
+                        service.onSettingsUpdated(lightUpdate = lightUpdate)
+                    }
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     fun restartKeyboardEngine(showToastMessage: Boolean = true) {
         notifySettingsChanged(restart = true)
-        if (showToastMessage) {
-            showToast("Keyboard restarted successfully!")
+        try {
+            KeyboardService.activeInstance?.restartKeyboard()
+        } catch (_: Exception) {}
+        try {
+            val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            }
+            if (intent != null) {
+                try {
+                    val pendingIntent = PendingIntent.getActivity(
+                        this,
+                        123456,
+                        intent,
+                        PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+                    alarmManager?.set(
+                        AlarmManager.ELAPSED_REALTIME,
+                        SystemClock.elapsedRealtime() + 250L,
+                        pendingIntent
+                    )
+                } catch (_: Exception) {}
+                startActivity(intent)
+            }
+            finishAffinity()
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                android.os.Process.killProcess(android.os.Process.myPid())
+            }, 100L)
+        } catch (_: Exception) {
+            if (showToastMessage) {
+                showToast("Keyboard restarted successfully!")
+            }
         }
     }
 
@@ -1547,193 +1761,6 @@ class MainActivity : ComponentActivity() {
             }
         }
         root.addView(browseMoreBtn)
-
-        dialog.setContentView(root)
-        dialog.show()
-    }
-
-    fun showLanguageSelectorDialog(onChanged: () -> Unit = {}) {
-        val density = resources.displayMetrics.density
-        fun dp(v: Float) = (v * density).toInt()
-
-        val dialog = Dialog(this)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val pad = dp(16f)
-            setPadding(pad, pad, pad, pad)
-            background = GradientDrawable().apply {
-                cornerRadius = dp(20f).toFloat()
-                setColor(tokens.surface)
-                setStroke(dp(1f), tokens.cardBorder)
-            }
-            layoutParams = ViewGroup.LayoutParams(dp(340f), dp(520f))
-        }
-
-        root.addView(TextView(this).apply {
-            text = "Keyboard Language"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(tokens.textPrimary)
-            setPadding(0, 0, 0, dp(4f))
-        })
-
-        root.addView(TextView(this).apply {
-            text = "Select your active language. Neural predictions, autocorrect, and grammar check will automatically adapt."
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTextColor(tokens.textSecondary)
-            setPadding(0, 0, 0, dp(12f))
-        })
-
-        val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-            isFillViewport = true
-        }
-
-        val itemsContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        val isSystemMode = GnosisLanguageManager.isSystemLanguageMode(this)
-        val activeLang = GnosisLanguageManager.resolveEffectiveLanguage(this)
-
-        val sysCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val p = dp(12f)
-            setPadding(p, p, p, p)
-            background = GradientDrawable().apply {
-                cornerRadius = dp(14f).toFloat()
-                setColor(tokens.chipBg)
-                setStroke(dp(1f), if (isSystemMode) tokens.accent else tokens.cardBorder)
-            }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(8f)
-            }
-            isClickable = true
-            isFocusable = true
-            setOnClickListener {
-                GnosisLanguageManager.setLanguageMode(this@MainActivity, Skins.MODE_LANG_SYSTEM)
-                EngineFactory.invalidateCache()
-                notifySettingsChanged(restart = true)
-                showToast("Language: Follow System (${java.util.Locale.getDefault().displayLanguage})")
-                dialog.dismiss()
-                onChanged()
-            }
-        }
-
-        val sysRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val sysCol = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        sysCol.addView(TextView(this).apply {
-            text = "Follow Phone Region / Language"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(tokens.textPrimary)
-        })
-        sysCol.addView(TextView(this).apply {
-            text = "Auto-detect: ${java.util.Locale.getDefault().displayName}"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setTextColor(tokens.textSecondary)
-        })
-        sysRow.addView(sysCol)
-
-        if (isSystemMode) {
-            sysRow.addView(TextView(this).apply {
-                text = "Active"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(tokens.accent)
-            })
-        }
-        sysCard.addView(sysRow)
-        itemsContainer.addView(sysCard)
-
-        for (lang in GnosisLanguageManager.SUPPORTED_LANGUAGES) {
-            val isCurrent = !isSystemMode && activeLang.code == lang.code
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                val p = dp(12f)
-                setPadding(p, p, p, p)
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(14f).toFloat()
-                    setColor(tokens.chipBg)
-                    setStroke(dp(1f), if (isCurrent) tokens.accent else tokens.cardBorder)
-                }
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = dp(8f)
-                }
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    GnosisLanguageManager.setActiveLanguage(this@MainActivity, lang.code)
-                    EngineFactory.invalidateCache()
-                    notifySettingsChanged(restart = true)
-                    showToast("Active Language: ${lang.name}")
-                    dialog.dismiss()
-                    onChanged()
-                }
-            }
-
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            val col = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            col.addView(TextView(this).apply {
-                text = "${lang.name} (${lang.nativeName})"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(tokens.textPrimary)
-            })
-            col.addView(TextView(this).apply {
-                text = "Code: ${lang.shortLabel}  •  Default Layout: ${lang.defaultLayout}"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                setTextColor(tokens.textSecondary)
-            })
-            row.addView(col)
-
-            if (isCurrent) {
-                row.addView(TextView(this).apply {
-                    text = "Active"
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(tokens.accent)
-                })
-            }
-            card.addView(row)
-            itemsContainer.addView(card)
-        }
-
-        scroll.addView(itemsContainer)
-        root.addView(scroll)
-
-        val closeBtn = TextView(this).apply {
-            text = "Done"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(tokens.accent)
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12f).toFloat()
-                setColor(tokens.chipBg)
-                setStroke(dp(1f), tokens.accent)
-            }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42f)).apply {
-                topMargin = dp(10f)
-            }
-            setOnClickListener { dialog.dismiss() }
-        }
-        root.addView(closeBtn)
 
         dialog.setContentView(root)
         dialog.show()
@@ -2211,175 +2238,6 @@ class MainActivity : ComponentActivity() {
         dialog.show()
     }
 
-    fun showDictionaryStoreDialog(onChanged: () -> Unit = {}) {
-        val density = resources.displayMetrics.density
-        fun dp(v: Float) = (v * density).toInt()
-
-        val dialog = Dialog(this)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val pad = dp(16f)
-            setPadding(pad, pad, pad, pad)
-            background = GradientDrawable().apply {
-                cornerRadius = dp(20f).toFloat()
-                setColor(tokens.surface)
-                setStroke(dp(1f), tokens.cardBorder)
-            }
-            layoutParams = ViewGroup.LayoutParams(dp(340f), dp(480f))
-        }
-
-        root.addView(TextView(this).apply {
-            text = "Additional Dictionaries Store"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(tokens.textPrimary)
-            setPadding(0, 0, 0, dp(4f))
-        })
-
-        root.addView(TextView(this).apply {
-            text = "Download verified multi-language autocorrect dictionaries."
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTextColor(tokens.textSecondary)
-            setPadding(0, 0, 0, dp(12f))
-        })
-
-        val itemsScroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        }
-        val itemsContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        itemsScroll.addView(itemsContainer)
-        root.addView(itemsScroll)
-
-        fun renderPacks() {
-            itemsContainer.removeAllViews()
-            for (pack in DictionaryExtensionManager.AVAILABLE_PACKS) {
-                val installed = DictionaryExtensionManager.isInstalled(this, pack.id)
-                val enabled = DictionaryExtensionManager.isEnabled(this, pack.id)
-                val count = DictionaryExtensionManager.getWordCount(this, pack.id)
-
-                val card = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(12f).toFloat()
-                        setColor(tokens.chipBg)
-                        setStroke(dp(1f), if (enabled) tokens.accent else tokens.cardBorder)
-                    }
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                        bottomMargin = dp(8f)
-                    }
-                }
-
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                }
-
-                val infoCol = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                }
-                infoCol.addView(TextView(this).apply {
-                    text = pack.name
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(if (enabled) tokens.accent else tokens.textPrimary)
-                })
-                infoCol.addView(TextView(this).apply {
-                    text = if (installed) "${pack.language} \u2022 $count words ready" else "${pack.language} \u2022 Available from GitHub"
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                    setTextColor(tokens.textSecondary)
-                })
-                row.addView(infoCol)
-
-                val actionBtn = TextView(this).apply {
-                    text = if (installed) (if (enabled) "Active" else "Disabled") else "Download"
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(if (installed && !enabled) tokens.textSecondary else tokens.onAccentText)
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(10f).toFloat()
-                        setColor(if (installed && !enabled) tokens.cardBorder else tokens.accent)
-                    }
-                    setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
-                    setOnClickListener {
-                        if (!installed) {
-                            text = "..."
-                            DictionaryExtensionManager.downloadPack(this@MainActivity, pack) { ok, wordCnt, _ ->
-                                runOnUiThread {
-                                    if (ok) {
-                                        showToast("Installed ${pack.name} ($wordCnt words)!")
-                                        notifySettingsChanged(restart = true)
-                                        onChanged()
-                                        renderPacks()
-                                        showRestartPromptDialog("Installed ${pack.name}. Gnosis Keyboard needs to restart to initialize the new dictionary and reload lexical pipelines.")
-                                    } else {
-                                        showToast("Download failed. Please check internet connection.", true)
-                                        text = "Retry"
-                                    }
-                                }
-                            }
-                        } else {
-                            val newEn = !enabled
-                            DictionaryExtensionManager.setEnabled(this@MainActivity, pack.id, newEn)
-                            notifySettingsChanged(restart = true)
-                            showToast("${pack.name} ${if (newEn) "enabled" else "disabled"}")
-                            onChanged()
-                            renderPacks()
-                        }
-                    }
-                }
-                row.addView(actionBtn)
-
-                if (installed) {
-                    val deleteBtn = FrameLayout(this).apply {
-                        val s = dp(32f)
-                        layoutParams = LinearLayout.LayoutParams(s, s).apply {
-                            marginStart = dp(8f)
-                        }
-                        background = GradientDrawable().apply {
-                            cornerRadius = dp(8f).toFloat()
-                            setColor(ColorUtils.setAlphaComponent(Color.RED, if (tokens.isLight) 25 else 40))
-                        }
-                        val iv = ImageView(this@MainActivity).apply {
-                            val d = ContextCompat.getDrawable(context, R.drawable.ic_trash_2)?.mutate()
-                                ?: ContextCompat.getDrawable(context, R.drawable.ic_delete)?.mutate()
-                            d?.setTint(Color.parseColor("#FF5252"))
-                            setImageDrawable(d)
-                            val p = dp(7f)
-                            setPadding(p, p, p, p)
-                            scaleType = ImageView.ScaleType.CENTER_INSIDE
-                        }
-                        addView(iv)
-                        isClickable = true
-                        isFocusable = true
-                        setOnClickListener {
-                            DictionaryExtensionManager.deletePack(this@MainActivity, pack.id)
-                            notifySettingsChanged(restart = true)
-                            showToast("Deleted ${pack.name} dictionary")
-                            onChanged()
-                            renderPacks()
-                        }
-                    }
-                    row.addView(deleteBtn)
-                }
-
-                card.addView(row)
-                itemsContainer.addView(card)
-            }
-        }
-
-        renderPacks()
-        dialog.setContentView(root)
-        dialog.show()
-    }
-
-
-
     fun refreshCurrentScreen() {
         if (currentDestinationTag != null) {
             val freshView = renderScreenForTag(currentDestinationTag)
@@ -2391,7 +2249,7 @@ class MainActivity : ComponentActivity() {
     }
 
     fun showRestartPromptDialog(
-        message: String = "Gnosis Keyboard needs to restart to initialize newly installed prediction engines and reload lexical pipelines."
+        message: String = "Gnosis Keyboard needs to restart to apply newly selected settings."
     ) {
         val density = resources.displayMetrics.density
         fun dp(v: Float) = (v * density).toInt()
@@ -2410,12 +2268,15 @@ class MainActivity : ComponentActivity() {
             val padH = dp(24f)
             val padV = dp(24f)
             setPadding(padH, padV, padH, padV)
+            minimumWidth = dialogW
             background = GradientDrawable().apply {
                 cornerRadius = dp(24f).toFloat()
                 setColor(tokens.surface)
                 setStroke(dp(1.2f), tokens.cardBorder)
             }
-            layoutParams = LinearLayout.LayoutParams(dialogW, ViewGroup.LayoutParams.WRAP_CONTENT)
+            layoutParams = FrameLayout.LayoutParams(dialogW, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.CENTER
+            }
         }
 
         val iconBox = FrameLayout(this).apply {
@@ -2520,19 +2381,22 @@ class MainActivity : ComponentActivity() {
         btnRow.addView(restartBtn)
         root.addView(btnRow)
 
-        dialog.setContentView(root, ViewGroup.LayoutParams(dialogW, ViewGroup.LayoutParams.WRAP_CONTENT))
+        dialog.setContentView(root)
         dialog.show()
         dialog.window?.let { w ->
             w.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             w.setLayout(dialogW, WindowManager.LayoutParams.WRAP_CONTENT)
             w.setGravity(Gravity.CENTER)
+            val lp = w.attributes
+            lp.width = dialogW
+            lp.height = WindowManager.LayoutParams.WRAP_CONTENT
+            lp.gravity = Gravity.CENTER
+            w.attributes = lp
         }
     }
 
     fun restartAppAndKeyboard() {
-        EngineFactory.invalidateCache()
-        SuggestionExtensionManager.invalidateCache()
-        DictionaryExtensionManager.clearCache()
+        GnosisEngine.reset()
         try {
             KeyboardService.activeInstance?.restartKeyboard()
         } catch (_: Exception) {}
@@ -2545,13 +2409,30 @@ class MainActivity : ComponentActivity() {
 
         showToast("Restarting Gnosis Keyboard...")
 
-        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        }
-        finish()
-        if (intent != null) {
-            startActivity(intent)
-        }
+        try {
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            }
+            if (launchIntent != null) {
+                val pendingIntent = android.app.PendingIntent.getActivity(
+                    applicationContext,
+                    1001,
+                    launchIntent,
+                    android.app.PendingIntent.FLAG_CANCEL_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                )
+                val alarmManager = getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+                alarmManager?.set(
+                    android.app.AlarmManager.RTC,
+                    System.currentTimeMillis() + 200L,
+                    pendingIntent
+                )
+            }
+        } catch (_: Exception) {}
+
+        finishAffinity()
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }, 150L)
     }
 
     fun setLauncherIconHidden(hidden: Boolean) {
@@ -2562,11 +2443,17 @@ class MainActivity : ComponentActivity() {
             } else {
                 PackageManager.COMPONENT_ENABLED_STATE_ENABLED
             }
-            packageManager.setComponentEnabledSetting(
-                alias,
-                targetState,
-                PackageManager.DONT_KILL_APP
-            )
+            val currentState = packageManager.getComponentEnabledSetting(alias)
+            if (currentState != targetState) {
+                if (!hidden && currentState == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT) {
+                    return
+                }
+                packageManager.setComponentEnabledSetting(
+                    alias,
+                    targetState,
+                    PackageManager.DONT_KILL_APP
+                )
+            }
         } catch (_: Exception) {}
     }
 

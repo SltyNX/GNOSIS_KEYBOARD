@@ -6,6 +6,10 @@ import android.app.AlertDialog
 import android.app.Dialog
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.speech.RecognitionService
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -26,6 +30,7 @@ import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
+import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -44,18 +49,21 @@ import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory
 import gnosis.keyboard.ClipboardHistory
 import gnosis.keyboard.CustomBackground
 import gnosis.keyboard.FontExtensionManager
-import gnosis.keyboard.DictionaryExtensionManager
-import gnosis.keyboard.SuggestionExtensionManager
-import gnosis.keyboard.HinglishDictionaryManager
+import gnosis.keyboard.KeySounds
+import gnosis.keyboard.KeyboardService
 import gnosis.keyboard.LayoutExtensionManager
 import gnosis.keyboard.MainActivity
 import gnosis.keyboard.ModernToggleView
 import gnosis.keyboard.R
+import gnosis.keyboard.RemoteFontInfo
 import gnosis.keyboard.Skins
 import gnosis.keyboard.ToolbarConfig
 import gnosis.keyboard.WordDictionary
 import gnosis.keyboard.dictionary.UserDictionaryRepository
-import gnosis.keyboard.engine.EngineFactory
+import gnosis.keyboard.engine.GnosisEngine
+import gnosis.keyboard.engine.ai.GnosisAiConfig
+import gnosis.keyboard.engine.ai.GnosisAiDetector
+import gnosis.keyboard.engine.language.LanguageDefinition
 import gnosis.keyboard.stats.StatsPeriod
 import gnosis.keyboard.stats.TypingStatisticsRepository
 import java.io.File
@@ -63,7 +71,7 @@ import java.util.Locale
 
 class ConceptScreens(
     private val activity: MainActivity,
-    private val tokens: ConceptThemeTokens,
+    var tokens: ConceptThemeTokens,
     private val density: Float,
     private val statsRepo: TypingStatisticsRepository,
     private val navigateTo: (View, String) -> Unit,
@@ -74,13 +82,69 @@ class ConceptScreens(
 
     private fun dp(v: Float) = ConceptComponents.dp(activity, v)
 
+    private fun getPrimaryUserName(): String? {
+        // Query primary Google Account display name
+        try {
+            val am = android.accounts.AccountManager.get(activity)
+            val accounts = am.getAccountsByType("com.google")
+            if (accounts.isNotEmpty()) {
+                val acc = accounts[0]
+                val possibleKeys = listOf("name", "display_name", "full_name", "given_name", "first_name")
+                for (k in possibleKeys) {
+                    val dName = try { am.getUserData(acc, k) } catch (_: Throwable) { null }
+                    if (!dName.isNullOrBlank()) return dName.trim()
+                }
+                val email = acc.name
+                if (email.contains("@")) {
+                    val namePart = email.substringBefore("@")
+                    val nameSegments = namePart.split(".", "_", "-")
+                        .filter { it.isNotBlank() && !it.all { ch -> ch.isDigit() } }
+                    if (nameSegments.isNotEmpty()) {
+                        val cleanName = nameSegments.joinToString(" ") { part ->
+                            part.replaceFirstChar { c -> if (c.isLowerCase()) c.titlecase(Locale.ROOT) else c.toString() }
+                        }
+                        if (cleanName.isNotBlank()) return cleanName
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+
+        // Query synchronized Google Account profile name via ContactsContract.Profile
+        try {
+            val cursor = activity.contentResolver.query(
+                android.provider.ContactsContract.Profile.CONTENT_URI,
+                arrayOf(
+                    android.provider.ContactsContract.Profile.DISPLAY_NAME_PRIMARY,
+                    android.provider.ContactsContract.Profile.DISPLAY_NAME
+                ),
+                null, null, null
+            )
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val dName = it.getString(0) ?: it.getString(1)
+                    if (!dName.isNullOrBlank()) return dName.trim()
+                }
+            }
+        } catch (_: Throwable) {}
+
+        return null
+    }
+
     fun buildHomeScreen(
+        onOpenAiIntelligence: () -> Unit,
         onOpenTyping: () -> Unit,
         onOpenAppearance: () -> Unit,
-        onOpenLanguage: () -> Unit,
-        onOpenPersonalization: () -> Unit,
-        onOpenAdvanced: () -> Unit,
-        onOpenQuickSettings: () -> Unit
+        onOpenLanguage: () -> Unit = {},
+        onOpenPersonalization: () -> Unit = {},
+        onOpenAdvanced: () -> Unit = {},
+        onOpenQuickSettings: () -> Unit = {},
+        onOpenLayoutToolbar: () -> Unit = {},
+        onOpenFontStore: () -> Unit = {},
+        onOpenSoundHaptics: () -> Unit = {},
+        onOpenEffectsWallpaper: () -> Unit = {},
+        onOpenClipboardSnippets: () -> Unit = {},
+        onOpenVoice: () -> Unit = {},
+        onOpenMaintenance: () -> Unit = {}
     ): View {
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -88,100 +152,18 @@ class ConceptScreens(
             setPadding(dp(16f), dp(12f), dp(16f), dp(90f))
         }
 
-        val profileRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(16f)
-            }
-        }
+        val welcomeTitle = "Welcome to Gnosis Keyboard"
 
-        val avatarBox = FrameLayout(activity).apply {
-            val s = dp(42f)
-            layoutParams = LinearLayout.LayoutParams(s, s).apply {
-                marginEnd = dp(12f)
-            }
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(tokens.accent)
-            }
-            isClickable = true
-            isFocusable = true
-            contentDescription = "Change profile photo"
-        }
-
-        val avatarFile = File(activity.filesDir, "user_avatar.jpg")
-        var hasCustomAvatar = false
-        if (avatarFile.exists() && avatarFile.length() > 0) {
-            try {
-                val bmp = BitmapFactory.decodeFile(avatarFile.absolutePath)
-                if (bmp != null) {
-                    val avatarIv = ImageView(activity).apply {
-                        val rounded = RoundedBitmapDrawableFactory.create(activity.resources, bmp).apply {
-                            isCircular = true
-                        }
-                        setImageDrawable(rounded)
-                        scaleType = ImageView.ScaleType.CENTER_CROP
-                        layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    }
-                    avatarBox.addView(avatarIv)
-                    hasCustomAvatar = true
-                }
-            } catch (_: Exception) {}
-        }
-
-        if (!hasCustomAvatar) {
-            val defaultTv = TextView(activity).apply {
-                text = "G"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(tokens.onAccentText)
-                gravity = Gravity.CENTER
-                layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            }
-            avatarBox.addView(defaultTv)
-        }
-
-        val editBadge = FrameLayout(activity).apply {
-            val bs = dp(16f)
-            layoutParams = FrameLayout.LayoutParams(bs, bs, Gravity.BOTTOM or Gravity.END)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(tokens.surface)
-                setStroke(dp(1f), tokens.cardBorder)
-            }
-            val editIv = ImageView(activity).apply {
-                val d = ContextCompat.getDrawable(context, R.drawable.ic_pen_line)?.mutate()
-                d?.setTint(tokens.accent)
-                setImageDrawable(d)
-                scaleType = ImageView.ScaleType.CENTER_INSIDE
-                val p = dp(3f)
-                setPadding(p, p, p, p)
-            }
-            addView(editIv)
-        }
-        avatarBox.addView(editBadge)
-        ConceptComponents.applyTactileFeedback(avatarBox, cornerRadiusDp = 21f, pressScale = 0.93f, tokens = tokens)
-        avatarBox.setOnClickListener {
-            activity.pickProfilePhoto.launch("image/*")
-        }
-        profileRow.addView(avatarBox)
-
-        val greetingCol = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val greetingTv = TextView(activity).apply {
-            text = "Welcome to\nGnosis Keyboard"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(tokens.textPrimary)
-            setLineSpacing(dp(2f).toFloat(), 1.0f)
-        }
-        greetingCol.addView(greetingTv)
-        profileRow.addView(greetingCol)
-
-        root.addView(profileRow)
+        root.addView(
+            ConceptComponents.createHeroBrandCard(
+                context = activity,
+                title = welcomeTitle,
+                description = "Modern keyboard engine with neural text intelligence, custom themes, and adaptive styling.",
+                iconRes = R.drawable.ic_sparkles,
+                tokens = tokens,
+                density = density
+            )
+        )
 
         val isEnabled = activity.isKeyboardEnabled()
         val isSelected = activity.isKeyboardSelected()
@@ -235,11 +217,16 @@ class ConceptScreens(
 
         data class CategorySpec(val title: String, val subtitle: String, val iconRes: Int, val action: () -> Unit)
         val categories = listOf(
-            CategorySpec("Typing & Suggestions", "Smart typing, multi-engine, mechanics & gestures", R.drawable.ic_keyboard, onOpenTyping),
-            CategorySpec("Appearance", "Design studio, themes, key shapes, fonts & effects", R.drawable.ic_palette, onOpenAppearance),
-            CategorySpec("Language & Dictionary", "Languages, layouts, Hinglish & quick keys", R.drawable.ic_globe, onOpenLanguage),
-            CategorySpec("Personalization", "Shortcuts, learned data & custom words", R.drawable.ic_sparkles, onOpenPersonalization),
-            CategorySpec("Advanced Settings", "Sound, haptics, voice, clipboard & system modes", R.drawable.ic_settings, onOpenAdvanced)
+            CategorySpec("AI Intelligence", "On-device neural prediction, contextual completions & smart spell check", R.drawable.ic_sparkles, onOpenAiIntelligence),
+            CategorySpec("Typing & Autocorrect", "Auto-correction, contractions, free online predictions & gestures", R.drawable.ic_keyboard, onOpenTyping),
+            CategorySpec("Themes & Styling", "Visual themes gallery, modern custom accent studio & surface styling", R.drawable.ic_palette, onOpenAppearance),
+            CategorySpec("Layout & Toolbar", "Revamped & Classic layout architecture, toolbar sizing hyper slider & quick keys", R.drawable.ic_layout, onOpenLayoutToolbar),
+            CategorySpec("Typography & Font Store", "Live typeface previews, font scale & cool decorative font styles", R.drawable.ic_type, onOpenFontStore),
+            CategorySpec("Sound & Haptics", "Acoustic & piano tone schemes, audio volume & haptic vibration strength", R.drawable.ic_volume_2, onOpenSoundHaptics),
+            CategorySpec("Effects & Wallpaper", "Keypress particle effects, custom photo background & dim levels", R.drawable.ic_wand_sparkles, onOpenEffectsWallpaper),
+            CategorySpec("Clipboard & Snippets", "Clipboard history, screenshot pasting, message armour & text shortcuts", R.drawable.ic_clipboard, onOpenClipboardSnippets),
+            CategorySpec("Voice Typing", "Speech recognition engine selection & microphone toolbar integration", R.drawable.ic_mic, onOpenVoice),
+            CategorySpec("System & Maintenance", "Restart keyboard, reset settings, theme backup & live diagnostics", R.drawable.ic_settings, onOpenMaintenance)
         )
 
         for (spec in categories) {
@@ -260,38 +247,6 @@ class ConceptScreens(
             root.addView(card)
         }
 
-        val currentStats = statsRepo.getStats(StatsPeriod.ALL_TIME)
-        val statsMini = ConceptComponents.createCard(activity, tokens, density)
-        ConceptComponents.applyTactileFeedback(statsMini, cornerRadiusDp = 20f, pressScale = 0.982f, tokens = tokens)
-        statsMini.addView(ConceptComponents.createCardHeader(activity, "TYPING INSIGHTS", tokens, density, R.drawable.ic_bar_chart))
-        val statsRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(14f), dp(4f), dp(14f), dp(12f))
-        }
-        fun addMiniCol(label: String, value: String) {
-            val col = LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            col.addView(TextView(activity).apply {
-                text = value
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(tokens.textPrimary)
-            })
-            col.addView(TextView(activity).apply {
-                text = label
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                setTextColor(tokens.textSecondary)
-            })
-            statsRow.addView(col)
-        }
-        addMiniCol("Words Typed", "${currentStats.totalKeystrokes / 5}")
-        addMiniCol("Time Saved", currentStats.timeSavedFormatted)
-        addMiniCol("Suggestions", "${currentStats.suggestionsAccepted}")
-        statsMini.addView(statsRow)
-        root.addView(statsMini)
-
         return root
     }
 
@@ -306,8 +261,8 @@ class ConceptScreens(
         root.addView(
             ConceptComponents.createHeroBrandCard(
                 context = activity,
-                title = "Typing & Suggestions",
-                description = "Configure smart offline predictions, auto-correction sensitivity, punctuation behaviors, and gesture typing.",
+                title = "Typing & Intelligence",
+                description = "Configure predictive text, auto-correction, writing assistant, and typing gestures.",
                 iconRes = R.drawable.ic_keyboard,
                 tokens = tokens,
                 density = density
@@ -315,11 +270,10 @@ class ConceptScreens(
         )
 
         val card1 = ConceptComponents.createCard(activity, tokens, density)
-
-        card1.addView(ConceptComponents.createCardHeader(activity, "NEURAL PREDICTION & GRAMMAR", tokens, density, R.drawable.ic_sparkles))
+        card1.addView(ConceptComponents.createCardHeader(activity, "TEXT PREDICTION & CORRECTION", tokens, density, R.drawable.ic_sparkles))
 
         card1.addView(ConceptComponents.createSwitchRow(
-            activity, "Next-Word Predictions", "On-device 96-dimensional neural vector language predictions",
+            activity, "Predictive Text", "Predict next words and completions in real time as you type",
             p.getBoolean(Skins.KEY_PREDICTIONS, true), tokens, density, R.drawable.ic_sparkles
         ) { v ->
             p.edit().putBoolean(Skins.KEY_PREDICTIONS, v).apply()
@@ -327,15 +281,23 @@ class ConceptScreens(
         })
 
         card1.addView(ConceptComponents.createSwitchRow(
-            activity, "Smart Auto-Correction", "Continuous 2D spatial Gaussian and semantic vector typo correction",
-            p.getBoolean(Skins.KEY_AUTOCORRECT, true), tokens, density, R.drawable.ic_check
+            activity, "Free Online Predictions", "Fetch real-time cloud neural suggestions and completions for free",
+            p.getBoolean(Skins.KEY_ONLINE_PREDICTIONS, Skins.DEFAULT_ONLINE_PREDICTIONS), tokens, density, R.drawable.ic_sparkles
+        ) { v ->
+            p.edit().putBoolean(Skins.KEY_ONLINE_PREDICTIONS, v).apply()
+            activity.notifySettingsChanged(restart = false)
+        })
+
+        card1.addView(ConceptComponents.createSwitchRow(
+            activity, "Auto-Correction", "Automatically correct typos, missed contractions and apostrophes when pressing Space or Punctuation",
+            p.getBoolean(Skins.KEY_AUTOCORRECT, Skins.DEFAULT_AUTOCORRECT), tokens, density, R.drawable.ic_check
         ) { v ->
             p.edit().putBoolean(Skins.KEY_AUTOCORRECT, v).apply()
             activity.notifySettingsChanged(restart = false)
         })
 
         card1.addView(ConceptComponents.createSwitchRow(
-            activity, "Grammar & Proofread Assistant", "Dedicated toolbar proofread action for subject-verb agreement and homophones",
+            activity, "Writing Assistant & Proofreading", "Real-time grammar suggestions, homophone checks, and apostrophe fixes",
             p.getBoolean(Skins.KEY_GRAMMAR, true), tokens, density, R.drawable.ic_wand_sparkles
         ) { v ->
             p.edit().putBoolean(Skins.KEY_GRAMMAR, v).apply()
@@ -343,7 +305,7 @@ class ConceptScreens(
         })
 
         card1.addView(ConceptComponents.createSwitchRow(
-            activity, "Next-Word Suggestions", "Predict what you might type next based on context",
+            activity, "Suggestion Strip", "Display candidate pills and word completions above the keyboard",
             p.getBoolean(Skins.KEY_SUGGESTIONS, true), tokens, density, R.drawable.ic_keyboard
         ) { v ->
             p.edit().putBoolean(Skins.KEY_SUGGESTIONS, v).apply()
@@ -351,7 +313,7 @@ class ConceptScreens(
         })
 
         card1.addView(ConceptComponents.createSwitchRow(
-            activity, "Emoji Suggestions", "Suggest contextual emojis as you type words",
+            activity, "Contextual Emoji Suggestions", "Recommend relevant emojis corresponding to typed words",
             p.getBoolean(Skins.KEY_EMOJI_SUGGESTIONS, true), tokens, density, R.drawable.ic_smile
         ) { v ->
             p.edit().putBoolean(Skins.KEY_EMOJI_SUGGESTIONS, v).apply()
@@ -363,7 +325,7 @@ class ConceptScreens(
             title = "Emoji Size Scale",
             subtitle = "Adjust size of emojis in candidate bar and picker",
             min = 70, max = 140,
-            current = p.getInt(Skins.KEY_EMOJI_SIZE, Skins.DEFAULT_EMOJI_SIZE),
+            current = Skins.prefInt(p, Skins.KEY_EMOJI_SIZE, Skins.DEFAULT_EMOJI_SIZE),
             suffix = "%", tokens = tokens, density = density,
             iconRes = R.drawable.ic_smile,
             step = 1,
@@ -372,18 +334,10 @@ class ConceptScreens(
             p.edit().putInt(Skins.KEY_EMOJI_SIZE, v).apply()
             activity.notifySettingsChanged(restart = true)
         })
-
-        card1.addView(ConceptComponents.createSwitchRow(
-            activity, "Grammar Check", "Flag grammatical errors and suggest corrections",
-            p.getBoolean(Skins.KEY_GRAMMAR, true), tokens, density, R.drawable.ic_shield
-        ) { v ->
-            p.edit().putBoolean(Skins.KEY_GRAMMAR, v).apply()
-            activity.notifySettingsChanged(restart = false)
-        })
         root.addView(card1)
 
         val card2 = ConceptComponents.createCard(activity, tokens, density)
-        card2.addView(ConceptComponents.createCardHeader(activity, "MECHANICS & GESTURES", tokens, density, R.drawable.ic_sliders))
+        card2.addView(ConceptComponents.createCardHeader(activity, "TYPING MECHANICS & GESTURES", tokens, density, R.drawable.ic_sliders))
 
         card2.addView(ConceptComponents.createSwitchRow(
             activity, "Double-Space Period", "Double-tap spacebar to insert a period and a space",
@@ -425,7 +379,7 @@ class ConceptScreens(
             activity.notifySettingsChanged(restart = true)
         })
 
-        val savedMs = p.getInt(Skins.KEY_LONG_PRESS_MS, 250).coerceIn(100, 400)
+        val savedMs = Skins.prefInt(p, Skins.KEY_LONG_PRESS_MS, 250).coerceIn(100, 400)
         card2.addView(ConceptComponents.createSliderRow(
             context = activity,
             title = "Long Press Delay",
@@ -466,6 +420,181 @@ class ConceptScreens(
             activity.notifySettingsChanged(restart = true)
         })
         root.addView(card2)
+
+        return root
+    }
+
+    fun buildAiIntelligenceScreen(): View {
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(16f), dp(12f), dp(16f), dp(80f))
+        }
+
+        root.addView(
+            ConceptComponents.createHeroBrandCard(
+                context = activity,
+                title = "AI Text Intelligence",
+                description = "On-device neural language modeling, contextual predictions, intelligent autocomplete, and private typo recovery.",
+                iconRes = R.drawable.ic_sparkles,
+                tokens = tokens,
+                density = density
+            )
+        )
+
+        // Card 1: Master Controls & Core Capabilities
+        val card1 = ConceptComponents.createCard(activity, tokens, density)
+        card1.addView(ConceptComponents.createCardHeader(activity, "AI CORE & TYPING ASSIST", tokens, density, R.drawable.ic_sparkles))
+
+        card1.addView(ConceptComponents.createSwitchRow(
+            activity, "Enable AI Intelligence", "Master switch for neural predictions, completions and contextual spell check",
+            GnosisAiConfig.isAiEnabled(activity), tokens, density, R.drawable.ic_sparkles
+        ) { v ->
+            GnosisAiConfig.setAiEnabled(activity, v)
+            activity.notifySettingsChanged(restart = false)
+        })
+
+        card1.addView(ConceptComponents.createSwitchRow(
+            activity, "Contextual Predictions", "Predict words and phrases based on conversation and linguistic context",
+            GnosisAiConfig.isContextualPredictionsEnabled(activity), tokens, density, R.drawable.ic_type
+        ) { v ->
+            GnosisAiConfig.setContextualPredictionsEnabled(activity, v)
+            activity.notifySettingsChanged(restart = false)
+        })
+
+        card1.addView(ConceptComponents.createSwitchRow(
+            activity, "Smart Autocomplete", "Complete words, phrases, and abbreviations dynamically as you type",
+            GnosisAiConfig.isSmartAutocompleteEnabled(activity), tokens, density, R.drawable.ic_keyboard
+        ) { v ->
+            GnosisAiConfig.setSmartAutocompleteEnabled(activity, v)
+            activity.notifySettingsChanged(restart = false)
+        })
+
+        card1.addView(ConceptComponents.createSwitchRow(
+            activity, "AI Spell Correction", "Intelligent error recovery with spatial key awareness and context ranking",
+            GnosisAiConfig.isAiSpellCorrectionEnabled(activity), tokens, density, R.drawable.ic_check
+        ) { v ->
+            GnosisAiConfig.setAiSpellCorrectionEnabled(activity, v)
+            activity.notifySettingsChanged(restart = false)
+        })
+        root.addView(card1)
+
+        // Card 2: Execution & Privacy
+        val card2 = ConceptComponents.createCard(activity, tokens, density)
+        card2.addView(ConceptComponents.createCardHeader(activity, "PROCESSING MODE & PERFORMANCE", tokens, density, R.drawable.ic_sliders))
+
+        val callout = ConceptComponents.createCallout(
+            context = activity,
+            text = "On-Device Neural Engine: Keystrokes and text suggestions are processed locally on your device.",
+            iconRes = R.drawable.ic_shield,
+            tokens = tokens,
+            density = density
+        )
+        card2.addView(callout)
+
+        card2.addView(ConceptComponents.createSectionHeader(activity, "Processing Architecture", tokens, density))
+        card2.addView(ConceptComponents.createNavRow(
+            activity, "Execution Mode", "On-Device Neural Engine (Active)",
+            null, tokens, density, R.drawable.ic_sliders, false
+        ) {})
+
+        card2.addView(ConceptComponents.createSectionHeader(activity, "Performance Profile", tokens, density))
+        val currentProfile = GnosisAiConfig.getPerformanceProfile(activity)
+        val profileOptions = listOf("Balanced (Standard)", "Lightweight (Battery Saver)")
+        val profileIdx = if (currentProfile == GnosisAiConfig.PROFILE_BALANCED) 0 else 1
+        val profileSelector = ConceptComponents.createSegmentSelector(
+            context = activity,
+            options = profileOptions,
+            selectedIndex = profileIdx,
+            tokens = tokens,
+            density = density
+        ) { idx ->
+            val p = if (idx == 0) GnosisAiConfig.PROFILE_BALANCED else GnosisAiConfig.PROFILE_LIGHTWEIGHT
+            GnosisAiConfig.setPerformanceProfile(activity, p)
+            Toast.makeText(activity, "Performance profile set to ${profileOptions[idx]}", Toast.LENGTH_SHORT).show()
+        }
+        card2.addView(profileSelector)
+        root.addView(card2)
+
+        // Card 3: System AI Core & Hardware Diagnostics
+        val report = GnosisAiDetector.inspectCapabilities(activity)
+        val card3 = ConceptComponents.createCard(activity, tokens, density)
+        card3.addView(ConceptComponents.createCardHeader(activity, "AI ENGINE STATUS & HARDWARE", tokens, density, R.drawable.ic_info))
+
+        val statusRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16f), dp(8f), dp(16f), dp(4f))
+        }
+        val statusDot = View(activity).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(10f), dp(10f)).apply { marginEnd = dp(10f) }
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(if (report.isUniversalEngineActive) Color.parseColor("#10B981") else Color.parseColor("#F59E0B"))
+            }
+        }
+        statusRow.addView(statusDot)
+        val statusTv = TextView(activity).apply {
+            text = report.statusSummary
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(tokens.textPrimary)
+        }
+        statusRow.addView(statusTv)
+        card3.addView(statusRow)
+
+        val backendRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16f), dp(4f), dp(16f), dp(12f))
+        }
+        fun addDiagItem(title: String, desc: String) {
+            val tv = TextView(activity).apply {
+                text = "$title: $desc"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextColor(tokens.textSecondary)
+                setPadding(0, dp(2f), 0, dp(2f))
+            }
+            backendRow.addView(tv)
+        }
+        addDiagItem("Engine Backend", report.accelerationBackend)
+        addDiagItem("Hardware Tier", report.memoryTier)
+        for (d in report.details) {
+            val tv = TextView(activity).apply {
+                text = "• $d"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                setTextColor(tokens.textSecondary)
+                setPadding(0, dp(1f), 0, dp(1f))
+            }
+            backendRow.addView(tv)
+        }
+        card3.addView(backendRow)
+        root.addView(card3)
+
+        // Card 4: Clear Learned AI Data
+        val card4 = ConceptComponents.createCard(activity, tokens, density)
+        card4.addView(ConceptComponents.createCardHeader(activity, "LEARNED DATA & ADAPTATION", tokens, density, R.drawable.ic_sparkles))
+
+        val clearRow = ConceptComponents.createActionRow(
+            context = activity,
+            title = "Clear Learned AI Data",
+            subtitle = "Wipe personalized transition probabilities and n-gram memory without affecting other keyboard settings",
+            iconRes = R.drawable.ic_trash_2,
+            tokens = tokens,
+            density = density,
+            isDestructive = true
+        ) {
+            AlertDialog.Builder(activity)
+                .setTitle("Clear Learned AI Data?")
+                .setMessage("This will reset learned phrase predictions and vocabulary weights. General keyboard settings will not be affected.")
+                .setPositiveButton("Clear") { _, _ ->
+                    GnosisAiConfig.clearLearnedData(activity)
+                    Toast.makeText(activity, "Personalized AI predictions reset successfully", Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+        card4.addView(clearRow)
+        root.addView(card4)
 
         return root
     }
@@ -688,7 +817,7 @@ class ConceptScreens(
             setPadding(dp(16f), dp(12f), dp(16f), dp(80f))
         }
         val p = Skins.prefs(activity)
-        val curTheme = p.getString(Skins.KEY_THEME, "lucid-void") ?: "lucid-void"
+        val curTheme = p.getString(Skins.KEY_THEME, Skins.THEME_MD3_DYNAMIC) ?: Skins.THEME_MD3_DYNAMIC
         val isLucidVoid = curTheme.startsWith("lucid-void")
 
         root.addView(
@@ -702,380 +831,614 @@ class ConceptScreens(
             )
         )
 
-        val card1 = ConceptComponents.createCard(activity, tokens, density)
-        card1.addView(ConceptComponents.createCardHeader(activity, "THEME & COLOR PALETTE", tokens, density, R.drawable.ic_palette))
+        // Card 1: App Settings Appearance Mode
+        val appModeCard = ConceptComponents.createCard(activity, tokens, density)
+        appModeCard.addView(ConceptComponents.createCardHeader(activity, "APP SETTINGS APPEARANCE", tokens, density, R.drawable.ic_smartphone))
 
-        val modeOptions = listOf("Auto (System)", "Dark Mode", "Light Mode")
-        val currentMode = p.getString(Skins.KEY_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
-        val modeIdx = when (currentMode) {
+        val curAppMode = p.getString(Skins.KEY_APP_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
+        val appModeOptions = listOf("Auto (System)", "Dark Mode", "Light Mode")
+        val appModeIdx = when (curAppMode) {
             Skins.MODE_DARK -> 1
             Skins.MODE_LIGHT -> 2
             else -> 0
         }
-        card1.addView(
+        appModeCard.addView(
             ConceptComponents.createSegmentSelector(
                 context = activity,
-                options = modeOptions,
-                selectedIndex = modeIdx,
+                options = appModeOptions,
+                selectedIndex = appModeIdx,
                 tokens = tokens,
                 density = density
             ) { idx ->
-                val target = when (idx) {
+                val targetMode = when (idx) {
                     1 -> Skins.MODE_DARK
                     2 -> Skins.MODE_LIGHT
                     else -> Skins.MODE_AUTO
                 }
-                p.edit().putString(Skins.KEY_THEME_MODE, target).apply()
-                p.edit().putString("settings_theme_mode", target).apply()
+                p.edit().putString(Skins.KEY_APP_THEME_MODE, targetMode).apply()
+                p.edit().putString("settings_theme_mode", targetMode).apply()
                 activity.notifySettingsChanged(restart = true)
-                activity.reloadTheme()
                 onThemeChanged()
             }
         )
+        root.addView(appModeCard)
 
-        if (isLucidVoid) {
-            val notice = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(14f), dp(8f), dp(14f), dp(8f))
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(10f).toFloat()
-                    setColor(tokens.chipBg)
-                    setStroke(dp(1f), tokens.cardBorder)
-                }
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    setMargins(dp(14f), dp(6f), dp(14f), dp(6f))
-                }
-            }
-            val lockIv = ImageView(activity).apply {
-                val d = ContextCompat.getDrawable(context, R.drawable.ic_lock)?.mutate()
-                d?.setTint(tokens.textSecondary)
-                setImageDrawable(d)
-                layoutParams = LinearLayout.LayoutParams(dp(16f), dp(16f)).apply { marginEnd = dp(8f) }
-            }
-            notice.addView(lockIv)
-            val lockTv = TextView(activity).apply {
-                text = "Accent color is locked for Lucid Void (Frosted glass uses adaptive spectral tones)"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                setTextColor(tokens.textSecondary)
-            }
-            notice.addView(lockTv)
-            card1.addView(notice)
+        // Card 2: Keyboard Theme Appearance Mode
+        val kbModeCard = ConceptComponents.createCard(activity, tokens, density)
+        kbModeCard.addView(ConceptComponents.createCardHeader(activity, "KEYBOARD THEME APPEARANCE", tokens, density, R.drawable.ic_keyboard))
+
+        val curKbMode = if (p.contains(Skins.KEY_KEYBOARD_THEME_MODE)) {
+            p.getString(Skins.KEY_KEYBOARD_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
+        } else {
+            p.getString(Skins.KEY_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
         }
+        val kbModeOptions = listOf("Auto (System)", "Dark Mode", "Light Mode")
+        val kbModeIdx = when (curKbMode) {
+            Skins.MODE_DARK -> 1
+            Skins.MODE_LIGHT -> 2
+            else -> 0
+        }
+        kbModeCard.addView(
+            ConceptComponents.createSegmentSelector(
+                context = activity,
+                options = kbModeOptions,
+                selectedIndex = kbModeIdx,
+                tokens = tokens,
+                density = density
+            ) { idx ->
+                val targetMode = when (idx) {
+                    1 -> Skins.MODE_DARK
+                    2 -> Skins.MODE_LIGHT
+                    else -> Skins.MODE_AUTO
+                }
+                p.edit().putString(Skins.KEY_KEYBOARD_THEME_MODE, targetMode).apply()
+                p.edit().putString(Skins.KEY_THEME_MODE, targetMode).apply()
+                activity.notifySettingsChanged(restart = true)
+                onThemeChanged()
+            }
+        )
+        root.addView(kbModeCard)
 
-        val paletteRow = LinearLayout(activity).apply {
+        // Card 3: Dedicated Accent Color Palette Card
+        val accentCard = ConceptComponents.createCard(activity, tokens, density)
+        accentCard.addView(ConceptComponents.createCardHeader(activity, "ACCENT COLOR PALETTE", tokens, density, R.drawable.ic_palette))
+
+        val lockNotice = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14f), dp(6f), dp(14f), dp(12f))
-        }
-        val currentAccent = p.getInt(Skins.KEY_ACCENT, Skins.DEFAULT_ACCENT)
-        for ((hex, name) in Skins.ACCENT_PALETTE) {
-            val colorVal = Color.parseColor(hex)
-            val isSelected = colorVal == currentAccent
-            val circle = FrameLayout(activity).apply {
-                val s = dp(32f)
-                layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(8f) }
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(colorVal)
-                    if (isSelected && !isLucidVoid) {
-                        setStroke(dp(3f), tokens.textPrimary)
-                    }
-                }
-                isClickable = true
-                setOnClickListener {
-                    if (isLucidVoid) {
-                        activity.showToast("Accent color is locked for Lucid Void theme")
-                    } else {
-                        p.edit().putInt(Skins.KEY_ACCENT, colorVal).apply()
-                        p.edit().putInt("settings_accent_color", colorVal).apply()
-                        activity.notifySettingsChanged(restart = true)
-                        activity.reloadTheme()
-                        onThemeChanged()
-                        activity.showToast("Accent: $name")
-                    }
-                }
+            setPadding(dp(14f), dp(8f), dp(14f), dp(8f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10f).toFloat()
+                setColor(tokens.chipBg)
+                setStroke(dp(1f), tokens.cardBorder)
             }
-            paletteRow.addView(circle)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(dp(14f), dp(6f), dp(14f), dp(6f))
+            }
+            visibility = if (isLucidVoid) View.VISIBLE else View.GONE
         }
+        val lockIv = ImageView(activity).apply {
+            val d = ContextCompat.getDrawable(context, R.drawable.ic_lock)?.mutate()
+            d?.setTint(tokens.textSecondary)
+            setImageDrawable(d)
+            layoutParams = LinearLayout.LayoutParams(dp(16f), dp(16f)).apply { marginEnd = dp(8f) }
+        }
+        lockNotice.addView(lockIv)
+        val lockTv = TextView(activity).apply {
+            text = "Accent color is locked for Lucid Void (Sleek dark glass uses neutral smoked tones & specular edges)"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextColor(tokens.textSecondary)
+        }
+        lockNotice.addView(lockTv)
+        accentCard.addView(lockNotice)
+
         val scrollPalette = HorizontalScrollView(activity).apply {
             isHorizontalScrollBarEnabled = false
             if (isLucidVoid) alpha = 0.45f
-        }
-        scrollPalette.addView(paletteRow)
-        card1.addView(scrollPalette)
-
-        val themeFamilies = listOf(
-            "lucid-void" to "Lucid Void",
-            "md3_dynamic" to "Material You",
-            "onyx" to "Onyx Black",
-            "graphite" to "Graphite",
-            "midnight" to "Midnight Navy",
-            "ocean" to "Deep Ocean",
-            "ember" to "Sunset Ember",
-            "cyberpunk" to "Neon Cyberpunk",
-            "amoled" to "AMOLED Pure",
-            "forest" to "Emerald Forest",
-            "coral" to "Warm Coral",
-            "rose" to "Rose",
-            "contrast" to "High Contrast"
-        )
-
-        val presetHeader = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16f), dp(10f), dp(16f), dp(4f))
-        }
-        val presetIv = ImageView(activity).apply {
-            val d = ContextCompat.getDrawable(context, R.drawable.ic_palette)?.mutate()
-            d?.setTint(tokens.accent)
-            setImageDrawable(d)
-            layoutParams = LinearLayout.LayoutParams(dp(18f), dp(18f)).apply { marginEnd = dp(8f) }
-        }
-        presetHeader.addView(presetIv)
-        val presetTv = TextView(activity).apply {
-            text = "PRESET THEMES"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(tokens.textPrimary)
-        }
-        presetHeader.addView(presetTv)
-        card1.addView(presetHeader)
-
-        val presetScroll = HorizontalScrollView(activity).apply {
-            isHorizontalScrollBarEnabled = false
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             setPadding(dp(12f), dp(4f), dp(12f), dp(10f))
         }
-        val presetRow = LinearLayout(activity).apply {
+        val paletteRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        for ((id, name) in themeFamilies) {
-            val targetId = if (tokens.isLight) Skins.getPairedThemeId(id, true) else Skins.getPairedThemeId(id, false)
-            val preset = Skins.PRESETS[targetId] ?: Skins.PRESETS[id] ?: Skins.PRESETS["onyx"]!!
-            val isSelected = curTheme == id || (id == "lucid-void" && curTheme.startsWith("lucid-void")) ||
-                (id == "onyx" && (curTheme == "onyx" || curTheme == "light" || curTheme == "onyx_light")) ||
-                (curTheme == targetId)
+        var currentAccent = Skins.prefInt(p, Skins.KEY_ACCENT, Skins.DEFAULT_ACCENT)
 
-            val itemCol = LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER_HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(dp(76f), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    marginStart = dp(4f)
-                    marginEnd = dp(4f)
-                }
-                isClickable = true
-                isFocusable = true
+        data class SwatchEntry(val color: Int, val box: FrameLayout, val checkIv: ImageView)
+        val swatchEntries = mutableListOf<SwatchEntry>()
+
+        fun updateAccentSelection(newColor: Int, swatchName: String? = null) {
+            val lum = ColorUtils.calculateLuminance(newColor)
+            if (tokens.isLight && lum > 0.80) {
+                activity.showToast("Cannot apply light accent on Light Theme")
+                return
             }
-
-            val box = FrameLayout(activity).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(68f), dp(44f)).apply {
-                    bottomMargin = dp(4f)
-                }
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(10f).toFloat()
-                    try {
-                        setColor(Color.parseColor(preset.bg))
-                    } catch (_: Exception) {
-                        setColor(Color.parseColor("#121212"))
-                    }
-                    if (isSelected) {
-                        setStroke(dp(2f), tokens.accent)
+            if (!tokens.isLight && lum < 0.12) {
+                activity.showToast("Cannot apply dark accent on Dark Theme")
+                return
+            }
+            currentAccent = newColor
+            for (entry in swatchEntries) {
+                val isSel = entry.color == newColor
+                entry.box.background = GradientDrawable().apply {
+                    cornerRadius = dp(9f).toFloat()
+                    setColor(entry.color)
+                    if (isSel) {
+                        setStroke(dp(2.5f), Color.WHITE)
                     } else {
                         setStroke(dp(1f), tokens.cardBorder)
                     }
                 }
+                entry.checkIv.visibility = if (isSel) View.VISIBLE else View.GONE
             }
-
-            val keycapsRow = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER)
+            activity.updateAccentColor(newColor)
+            if (swatchName != null) {
+                activity.showToast("Accent: $swatchName")
             }
-
-            for (k in 0..2) {
-                val isAccentKey = (k == 1)
-                val miniCap = View(activity).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(14f), dp(18f)).apply {
-                        marginStart = dp(2f)
-                        marginEnd = dp(2f)
-                    }
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(3.5f).toFloat()
-                        try {
-                            if (isAccentKey) {
-                                setColor(Color.parseColor(preset.defaultAccent))
-                            } else {
-                                setColor(Color.parseColor(preset.key))
-                                setStroke(dp(0.7f), Color.parseColor(preset.keyBorder))
-                            }
-                        } catch (_: Exception) {
-                            setColor(Color.DKGRAY)
-                        }
-                    }
-                }
-                keycapsRow.addView(miniCap)
-            }
-            box.addView(keycapsRow)
-
-            if (isSelected) {
-                val checkIv = ImageView(activity).apply {
-                    val d = ContextCompat.getDrawable(context, R.drawable.ic_check)?.mutate()
-                    d?.setTint(Color.WHITE)
-                    setImageDrawable(d)
-                    scaleType = ImageView.ScaleType.CENTER_INSIDE
-                    val pad = dp(2f)
-                    setPadding(pad, pad, pad, pad)
-                    layoutParams = FrameLayout.LayoutParams(dp(14f), dp(14f), Gravity.TOP or Gravity.END).apply {
-                        setMargins(0, dp(3f), dp(3f), 0)
-                    }
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(tokens.accent)
-                    }
-                }
-                box.addView(checkIv)
-            }
-
-            itemCol.addView(box)
-
-            val nameTv = TextView(activity).apply {
-                text = name
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
-                setTextColor(if (isSelected) tokens.accent else tokens.textSecondary)
-                setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
-                gravity = Gravity.CENTER
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-            }
-            itemCol.addView(nameTv)
-
-            itemCol.setOnClickListener {
-                p.edit().putString(Skins.KEY_THEME, id).apply()
-                activity.notifySettingsChanged(restart = true)
-                activity.showToast("Applied theme: $name")
-                activity.reloadTheme()
-                onThemeChanged()
-            }
-
-            presetRow.addView(itemCol)
         }
-        presetScroll.addView(presetRow)
-        card1.addView(presetScroll)
 
-        if (isLucidVoid) {
-            val lucidGlassBox = LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(4f), dp(6f), dp(4f), dp(6f))
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(14f).toFloat()
-                    setColor(tokens.chipBg)
-                    setStroke(dp(1f), tokens.cardBorder)
-                }
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    setMargins(dp(14f), dp(4f), dp(14f), dp(10f))
-                }
+        // Custom Color Picker Swatch Button
+        val customColorBtn = FrameLayout(activity).apply {
+            val s = dp(36f)
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(8f) }
+            background = GradientDrawable().apply {
+                cornerRadius = dp(9f).toFloat()
+                setColor(tokens.chipBg)
+                setStroke(dp(1.2f), tokens.cardBorder)
             }
-
-            val glassHeader = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(14f), dp(8f), dp(14f), dp(4f))
-            }
-            val glassIv = ImageView(activity).apply {
-                val d = ContextCompat.getDrawable(context, R.drawable.ic_sparkles)?.mutate()
+            val iv = ImageView(activity).apply {
+                val d = ContextCompat.getDrawable(context, R.drawable.ic_palette)?.mutate()
                 d?.setTint(tokens.accent)
                 setImageDrawable(d)
-                layoutParams = LinearLayout.LayoutParams(dp(16f), dp(16f)).apply { marginEnd = dp(8f) }
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                val p = dp(7f)
+                setPadding(p, p, p, p)
+                layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             }
-            glassHeader.addView(glassIv)
-            val glassTv = TextView(activity).apply {
-                text = if (tokens.isLight) "LUCID VOID GLASS (LIGHT MODE)" else "LUCID VOID GLASS (DARK MODE)"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(tokens.accent)
+            addView(iv)
+            isClickable = true
+            setOnClickListener {
+                showCustomAccentColorPickerDialog(currentAccent) { chosenColor ->
+                    updateAccentSelection(chosenColor, String.format("#%06X", 0xFFFFFF and chosenColor))
+                }
             }
-            glassHeader.addView(glassTv)
-            lucidGlassBox.addView(glassHeader)
+        }
+        paletteRow.addView(customColorBtn)
 
-            if (tokens.isLight) {
-                val curOpLight = p.getInt(Skins.KEY_LUCID_VOID_OPACITY_LIGHT, Skins.DEFAULT_LUCID_VOID_OPACITY_LIGHT).coerceIn(5, 95)
-                lucidGlassBox.addView(ConceptComponents.createSliderRow(
-                    context = activity, title = "Frosted Canvas Opacity", subtitle = "Light mode glass translucency through key surfaces",
-                    min = 5, max = 95, current = curOpLight,
-                    suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-                    defaultValue = Skins.DEFAULT_LUCID_VOID_OPACITY_LIGHT
-                ) { v ->
-                    p.edit().putInt(Skins.KEY_LUCID_VOID_OPACITY_LIGHT, v).putInt(Skins.KEY_LUCID_VOID_OPACITY, v).apply()
-                    activity.notifySettingsChanged(restart = false)
-                })
+        for ((hex, name) in Skins.ACCENT_PALETTE) {
+            val colorVal = Color.parseColor(hex)
+            val isSelected = (colorVal == currentAccent)
+            val lum = ColorUtils.calculateLuminance(colorVal)
+            val isRestricted = (tokens.isLight && lum > 0.80) || (!tokens.isLight && lum < 0.12)
 
-                val curBlurLight = p.getInt(Skins.KEY_LUCID_VOID_BLUR_LIGHT, Skins.DEFAULT_LUCID_VOID_BLUR_LIGHT).coerceIn(0, 80)
-                lucidGlassBox.addView(ConceptComponents.createSliderRow(
-                    context = activity, title = "Background Blur Radius", subtitle = "Gaussian glass blur applied behind frosted layers",
-                    min = 0, max = 80, current = curBlurLight,
-                    suffix = "px", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-                    defaultValue = Skins.DEFAULT_LUCID_VOID_BLUR_LIGHT
-                ) { v ->
-                    p.edit().putInt(Skins.KEY_LUCID_VOID_BLUR_LIGHT, v).putInt(Skins.KEY_LUCID_VOID_BLUR, v).apply()
-                    activity.notifySettingsChanged(restart = false)
-                })
-
-                val curTintLight = p.getInt(Skins.KEY_LUCID_VOID_TINT_LIGHT, Skins.DEFAULT_LUCID_VOID_TINT_LIGHT).coerceIn(0, 100)
-                lucidGlassBox.addView(ConceptComponents.createSliderRow(
-                    context = activity, title = "Milky Background Tint", subtitle = "Subtle milky frosted tint contrast overlay for light glass",
-                    min = 0, max = 100, current = curTintLight,
-                    suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-                    defaultValue = Skins.DEFAULT_LUCID_VOID_TINT_LIGHT
-                ) { v ->
-                    p.edit().putInt(Skins.KEY_LUCID_VOID_TINT_LIGHT, v).apply()
-                    activity.notifySettingsChanged(restart = false)
-                })
-            } else {
-                val curOpDark = p.getInt(Skins.KEY_LUCID_VOID_OPACITY_DARK, Skins.DEFAULT_LUCID_VOID_OPACITY_DARK).coerceIn(5, 95)
-                lucidGlassBox.addView(ConceptComponents.createSliderRow(
-                    context = activity, title = "Frosted Canvas Opacity", subtitle = "Dark mode glass translucency through key surfaces",
-                    min = 5, max = 95, current = curOpDark,
-                    suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-                    defaultValue = Skins.DEFAULT_LUCID_VOID_OPACITY_DARK
-                ) { v ->
-                    p.edit().putInt(Skins.KEY_LUCID_VOID_OPACITY_DARK, v).putInt(Skins.KEY_LUCID_VOID_OPACITY, v).apply()
-                    activity.notifySettingsChanged(restart = false)
-                })
-
-                val curBlurDark = p.getInt(Skins.KEY_LUCID_VOID_BLUR_DARK, Skins.DEFAULT_LUCID_VOID_BLUR_DARK).coerceIn(0, 80)
-                lucidGlassBox.addView(ConceptComponents.createSliderRow(
-                    context = activity, title = "Background Blur Radius", subtitle = "Gaussian glass blur applied behind frosted layers",
-                    min = 0, max = 80, current = curBlurDark,
-                    suffix = "px", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-                    defaultValue = Skins.DEFAULT_LUCID_VOID_BLUR_DARK
-                ) { v ->
-                    p.edit().putInt(Skins.KEY_LUCID_VOID_BLUR_DARK, v).putInt(Skins.KEY_LUCID_VOID_BLUR, v).apply()
-                    activity.notifySettingsChanged(restart = false)
-                })
-
-                val curTintDark = p.getInt(Skins.KEY_LUCID_VOID_TINT_DARK, Skins.DEFAULT_LUCID_VOID_TINT_DARK).coerceIn(0, 100)
-                lucidGlassBox.addView(ConceptComponents.createSliderRow(
-                    context = activity, title = "Milky Background Tint", subtitle = "Smoky obsidian milky tint contrast overlay for dark frosted glass",
-                    min = 0, max = 100, current = curTintDark,
-                    suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-                    defaultValue = Skins.DEFAULT_LUCID_VOID_TINT_DARK
-                ) { v ->
-                    p.edit().putInt(Skins.KEY_LUCID_VOID_TINT_DARK, v).apply()
-                    activity.notifySettingsChanged(restart = false)
-                })
+            val box = FrameLayout(activity).apply {
+                val s = dp(36f)
+                layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(8f) }
+                alpha = if (isRestricted) 0.35f else 1.0f
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(9f).toFloat()
+                    setColor(colorVal)
+                    if (isSelected) {
+                        setStroke(dp(2.5f), Color.WHITE)
+                    } else {
+                        setStroke(dp(1f), tokens.cardBorder)
+                    }
+                }
+                isClickable = true
             }
-            card1.addView(lucidGlassBox)
+
+            val checkIv = ImageView(activity).apply {
+                val d = ContextCompat.getDrawable(context, R.drawable.ic_check)?.mutate()
+                d?.setTint(Color.WHITE)
+                setImageDrawable(d)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                val pad = dp(7f)
+                setPadding(pad, pad, pad, pad)
+                layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                visibility = if (isSelected) View.VISIBLE else View.GONE
+            }
+            box.addView(checkIv)
+
+            box.setOnClickListener {
+                updateAccentSelection(colorVal, name)
+            }
+
+            swatchEntries.add(SwatchEntry(colorVal, box, checkIv))
+            paletteRow.addView(box)
+        }
+        scrollPalette.addView(paletteRow)
+        accentCard.addView(scrollPalette)
+        root.addView(accentCard)
+
+        // Card 4: Keyboard Theme & Active Preview
+        val presetCard = ConceptComponents.createCard(activity, tokens, density)
+        presetCard.addView(ConceptComponents.createCardHeader(activity, "KEYBOARD THEME", tokens, density, R.drawable.ic_palette))
+
+        val pairedActiveThemeId = if (tokens.isLight) Skins.getPairedThemeId(curTheme, true) else Skins.getPairedThemeId(curTheme, false)
+        val activePreset = Skins.PRESETS[curTheme] ?: Skins.PRESETS[pairedActiveThemeId] ?: Skins.PRESETS["onyx"]!!
+        val activeThemeName = activePreset.name
+
+        // Active Theme Card Box matching Theme Gallery design
+        val activeThemeCard = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14f).toFloat()
+                setColor(tokens.chipBg)
+                setStroke(dp(2f), tokens.accent)
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(dp(14f), dp(4f), dp(14f), dp(10f))
+            }
+            isClickable = true
+            isFocusable = true
+            ConceptComponents.applyTactileFeedback(this, cornerRadiusDp = 14f, pressScale = 0.98f, tokens = tokens)
+            setOnClickListener { onOpenThemeGallery() }
         }
 
-        card1.addView(
+        val liveGlassKeyDrawables = mutableListOf<Triple<GradientDrawable, Boolean, Boolean>>()
+        val liveStripPillDrawables = mutableListOf<GradientDrawable>()
+        lateinit var liveChassisDrawable: GradientDrawable
+
+        val activeChassis = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8f), dp(8f), dp(8f), dp(8f))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(92f))
+            liveChassisDrawable = GradientDrawable().apply {
+                cornerRadius = dp(12f).toFloat()
+                try {
+                    setColor(Color.parseColor(activePreset.bg))
+                } catch (_: Exception) {
+                    setColor(Color.parseColor("#121212"))
+                }
+                try {
+                    setStroke(dp(1f), Color.parseColor(activePreset.keyBorder))
+                } catch (_: Exception) {}
+            }
+            background = liveChassisDrawable
+        }
+
+        fun updateLivePreviewGlass(tintVal: Int) {
+            val t = ((tintVal.coerceIn(1, 100) - 1f) / 99f)
+            val isLightMode = tokens.isLight
+            if (!isLightMode) {
+                // Pure dark sleek dark glass: neutral smoked obsidian, zero blue tint
+                val bgAlpha = (30 + t * 216).toInt().coerceIn(25, 250)
+                val strokeAlpha = (30 + (1f - t * 0.35f) * 60).toInt().coerceIn(25, 120)
+                liveChassisDrawable.colors = intArrayOf(
+                    ColorUtils.setAlphaComponent(Color.parseColor("#0C0C10"), bgAlpha),
+                    ColorUtils.setAlphaComponent(Color.parseColor("#060608"), (bgAlpha * 1.05f).toInt().coerceAtMost(255))
+                )
+                liveChassisDrawable.setStroke(dp(1f), ColorUtils.setAlphaComponent(Color.WHITE, strokeAlpha))
+
+                for (pill in liveStripPillDrawables) {
+                    pill.setColor(ColorUtils.setAlphaComponent(Color.parseColor("#181820"), (22 + t * 200).toInt().coerceIn(18, 240)))
+                    pill.setStroke(dp(0.5f), ColorUtils.setAlphaComponent(Color.WHITE, 40))
+                }
+
+                for (item in liveGlassKeyDrawables) {
+                    val kd = item.first
+                    val isAction = item.second
+                    val isSpecial = item.third
+                    if (isAction) {
+                        kd.colors = intArrayOf(
+                            ColorUtils.setAlphaComponent(Color.parseColor("#363642"), (35 + t * 180).toInt().coerceIn(30, 245)),
+                            ColorUtils.setAlphaComponent(Color.parseColor("#1E1E26"), (28 + t * 190).toInt().coerceIn(25, 235))
+                        )
+                        kd.setStroke(dp(0.7f), ColorUtils.setAlphaComponent(Color.WHITE, (55 + (1f - t * 0.25f) * 55).toInt().coerceIn(45, 140)))
+                    } else if (isSpecial) {
+                        kd.colors = intArrayOf(
+                            ColorUtils.setAlphaComponent(Color.parseColor("#1A1A22"), (20 + t * 170).toInt().coerceIn(16, 225)),
+                            ColorUtils.setAlphaComponent(Color.parseColor("#0E0E12"), (16 + t * 180).toInt().coerceIn(12, 220))
+                        )
+                        kd.setStroke(dp(0.7f), ColorUtils.setAlphaComponent(Color.parseColor("#D4D4D8"), (24 + (1f - t * 0.35f) * 36).toInt().coerceIn(20, 100)))
+                    } else {
+                        kd.colors = intArrayOf(
+                            ColorUtils.setAlphaComponent(Color.parseColor("#26262E"), (25 + t * 185).toInt().coerceIn(20, 240)),
+                            ColorUtils.setAlphaComponent(Color.parseColor("#121216"), (20 + t * 195).toInt().coerceIn(16, 235))
+                        )
+                        kd.setStroke(dp(0.7f), ColorUtils.setAlphaComponent(Color.WHITE, (30 + (1f - t * 0.35f) * 45).toInt().coerceIn(25, 120)))
+                    }
+                }
+            } else {
+                // Frosted daylight acrylic
+                val bgAlpha = (35 + t * 205).toInt().coerceIn(30, 245)
+                liveChassisDrawable.colors = intArrayOf(
+                    ColorUtils.setAlphaComponent(Color.WHITE, bgAlpha),
+                    ColorUtils.setAlphaComponent(Color.parseColor("#E9ECEF"), (30 + t * 185).toInt().coerceIn(20, 230))
+                )
+                liveChassisDrawable.setStroke(dp(1f), ColorUtils.setAlphaComponent(Color.WHITE, (60 + t * 120).toInt().coerceIn(50, 220)))
+
+                for (pill in liveStripPillDrawables) {
+                    pill.setColor(ColorUtils.setAlphaComponent(Color.parseColor("#F1F3F5"), (25 + t * 190).toInt().coerceIn(20, 235)))
+                    pill.setStroke(dp(0.5f), ColorUtils.setAlphaComponent(Color.WHITE, 80))
+                }
+
+                for (item in liveGlassKeyDrawables) {
+                    val kd = item.first
+                    val isAction = item.second
+                    val isSpecial = item.third
+                    if (isAction) {
+                        kd.colors = intArrayOf(
+                            ColorUtils.setAlphaComponent(Color.WHITE, (60 + t * 180).toInt().coerceIn(50, 250)),
+                            ColorUtils.setAlphaComponent(Color.parseColor("#E2E6EA"), (45 + t * 185).toInt().coerceIn(40, 240))
+                        )
+                        kd.setStroke(dp(0.7f), ColorUtils.setAlphaComponent(Color.WHITE, 180))
+                    } else if (isSpecial) {
+                        kd.colors = intArrayOf(
+                            ColorUtils.setAlphaComponent(Color.parseColor("#E9ECEF"), (35 + t * 175).toInt().coerceIn(25, 230)),
+                            ColorUtils.setAlphaComponent(Color.parseColor("#DEE2E6"), (25 + t * 180).toInt().coerceIn(20, 220))
+                        )
+                        kd.setStroke(dp(0.7f), ColorUtils.setAlphaComponent(Color.WHITE, (50 + t * 80).toInt().coerceIn(40, 200)))
+                    } else {
+                        kd.colors = intArrayOf(
+                            ColorUtils.setAlphaComponent(Color.WHITE, (40 + t * 180).toInt().coerceIn(30, 245)),
+                            ColorUtils.setAlphaComponent(Color.parseColor("#F1F3F5"), (30 + t * 185).toInt().coerceIn(25, 235))
+                        )
+                        kd.setStroke(dp(0.7f), ColorUtils.setAlphaComponent(Color.WHITE, (60 + t * 90).toInt().coerceIn(50, 220)))
+                    }
+                }
+            }
+            activeChassis.invalidate()
+        }
+
+        val miniStrip = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(14f)).apply {
+                bottomMargin = dp(6f)
+            }
+        }
+        for (cand in listOf("Gnosis", "Smart", "Flow")) {
+            val candTv = TextView(activity).apply {
+                text = cand
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 8f)
+                setTypeface(null, Typeface.BOLD)
+                try {
+                    if (isLucidVoid) {
+                        setTextColor(if (tokens.isLight) Color.parseColor("#71717A") else Color.parseColor("#A1A1AA"))
+                    } else {
+                        setTextColor(Color.parseColor(activePreset.muted))
+                    }
+                } catch (_: Exception) {
+                    setTextColor(Color.LTGRAY)
+                }
+                gravity = Gravity.CENTER
+                includeFontPadding = false
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    marginStart = dp(2f)
+                    marginEnd = dp(2f)
+                }
+                val pillDrawable = GradientDrawable().apply {
+                    cornerRadius = dp(4f).toFloat()
+                    try {
+                        setColor(Color.parseColor(activePreset.chip))
+                        setStroke(dp(0.5f), Color.parseColor(activePreset.chipBorder))
+                    } catch (_: Exception) {}
+                }
+                if (isLucidVoid) {
+                    liveStripPillDrawables.add(pillDrawable)
+                }
+                background = pillDrawable
+            }
+            miniStrip.addView(candTv)
+        }
+        activeChassis.addView(miniStrip)
+
+        fun makeActiveMiniRow(keys: List<String>): LinearLayout {
+            val row = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(15f)).apply {
+                    bottomMargin = dp(3f)
+                }
+            }
+            for (k in keys) {
+                val isSpace = k == "SPACE"
+                val isAction = k == "Enter"
+                val isShift = k == "Shift"
+                val keyWeight = when {
+                    isSpace -> 3.2f
+                    isAction -> 1.5f
+                    isShift -> 1.3f
+                    else -> 1.0f
+                }
+                val keyView = TextView(activity).apply {
+                    text = if (isSpace) "" else k
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, if (isAction || isShift) 6.5f else 7.5f)
+                    setTypeface(null, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    includeFontPadding = false
+                    try {
+                        if (isLucidVoid) {
+                            setTextColor(if (tokens.isLight) Color.parseColor("#18181B") else Color.WHITE)
+                        } else {
+                            setTextColor(Color.parseColor(activePreset.text))
+                        }
+                    } catch (_: Exception) {
+                        setTextColor(Color.WHITE)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, keyWeight).apply {
+                        marginStart = dp(1f)
+                        marginEnd = dp(1f)
+                    }
+                    val keyDrawable = GradientDrawable().apply {
+                        cornerRadius = dp(3.5f).toFloat()
+                        try {
+                            if (isSpace || isAction) {
+                                setColor(Color.parseColor(activePreset.defaultAccent))
+                            } else {
+                                setColor(Color.parseColor(activePreset.key))
+                                setStroke(dp(0.7f), Color.parseColor(activePreset.keyBorder))
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    if (isLucidVoid) {
+                        liveGlassKeyDrawables.add(Triple(keyDrawable, isSpace || isAction, isShift))
+                    }
+                    background = keyDrawable
+                }
+                row.addView(keyView)
+            }
+            return row
+        }
+
+        activeChassis.addView(makeActiveMiniRow(listOf("Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P")))
+        activeChassis.addView(makeActiveMiniRow(listOf("A", "S", "D", "F", "G", "H", "J", "K", "L")))
+        activeChassis.addView(makeActiveMiniRow(listOf("Shift", "Z", "X", "C", "SPACE", "B", "N", "M", "Enter")))
+        activeThemeCard.addView(activeChassis)
+
+        val activeBottomRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10f), 0, 0)
+        }
+
+        val activeTextCol = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val activeTitleTv = TextView(activity).apply {
+            text = activeThemeName
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(tokens.textPrimary)
+        }
+        activeTextCol.addView(activeTitleTv)
+
+        val activeDescTv = TextView(activity).apply {
+            text = "Active keyboard preset • Tap to browse gallery"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextColor(tokens.textSecondary)
+            setPadding(0, dp(2f), 0, 0)
+        }
+        activeTextCol.addView(activeDescTv)
+        activeBottomRow.addView(activeTextCol)
+
+        val activeBadge = TextView(activity).apply {
+            text = "ACTIVE"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(tokens.onAccentText)
+            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8f).toFloat()
+                setColor(tokens.accent)
+            }
+        }
+        activeBottomRow.addView(activeBadge)
+        activeThemeCard.addView(activeBottomRow)
+        presetCard.addView(activeThemeCard)
+
+        val curTint = Skins.prefInt(p, Skins.KEY_LUCID_VOID_TINT, Skins.DEFAULT_LUCID_VOID_TINT).coerceIn(1, 100)
+        if (isLucidVoid) {
+            updateLivePreviewGlass(curTint)
+        }
+
+        val lucidGlassBox = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14f), dp(12f), dp(14f), dp(14f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14f).toFloat()
+                setColor(tokens.chipBg)
+                setStroke(dp(1f), tokens.cardBorder)
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(dp(14f), dp(4f), dp(14f), dp(10f))
+            }
+            visibility = if (isLucidVoid) View.VISIBLE else View.GONE
+        }
+
+        val glassHeader = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(6f))
+        }
+        val glassIv = ImageView(activity).apply {
+            val d = ContextCompat.getDrawable(context, R.drawable.ic_sparkles)?.mutate()
+            d?.setTint(tokens.accent)
+            setImageDrawable(d)
+            layoutParams = LinearLayout.LayoutParams(dp(18f), dp(18f)).apply { marginEnd = dp(8f) }
+        }
+        glassHeader.addView(glassIv)
+        val glassTv = TextView(activity).apply {
+            text = if (tokens.isLight) "LUCID VOID FROSTED GLASS" else "LUCID VOID DARK GLASS"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(tokens.accent)
+        }
+        glassHeader.addView(glassTv)
+        lucidGlassBox.addView(glassHeader)
+
+        val sliderInfoRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4f), 0, dp(4f))
+        }
+        val sliderTitleCol = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val sliderTitle = TextView(activity).apply {
+            text = "Glass Tint & Transparency"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(tokens.textPrimary)
+        }
+        sliderTitleCol.addView(sliderTitle)
+        val sliderDesc = TextView(activity).apply {
+            text = "1 = Clear & Transparent • 100 = Opaque Smoked Glass"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextColor(tokens.textSecondary)
+        }
+        sliderTitleCol.addView(sliderDesc)
+        sliderInfoRow.addView(sliderTitleCol)
+
+        val valueBadge = TextView(activity).apply {
+            text = "$curTint / 100"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(tokens.accent)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8f).toFloat()
+                setColor(tokens.surface)
+                setStroke(dp(1f), tokens.cardBorder)
+            }
+            setPadding(dp(8f), dp(3f), dp(8f), dp(3f))
+        }
+        sliderInfoRow.addView(valueBadge)
+        lucidGlassBox.addView(sliderInfoRow)
+
+        val hyperSlider = HyperGlideSliderView(activity).apply {
+            min = 1
+            max = 100
+            step = 1
+            value = curTint
+            accentColor = tokens.accent
+            isLightMode = tokens.isLight
+            onValueChange = { v ->
+                valueBadge.text = "$v / 100"
+                updateLivePreviewGlass(v)
+            }
+            onValueChangeFinished = { v ->
+                valueBadge.text = "$v / 100"
+                p.edit().putInt(Skins.KEY_LUCID_VOID_TINT, v).apply()
+            }
+        }
+        lucidGlassBox.addView(hyperSlider)
+        presetCard.addView(lucidGlassBox)
+
+        presetCard.addView(
             ConceptComponents.createNavRow(
                 activity, "Theme Selection Gallery", "Browse visual presets & color studios",
                 null, tokens, density, R.drawable.ic_palette, true
             ) { onOpenThemeGallery() }
         )
+        root.addView(presetCard)
+
+        // Card 5: Key Surface Style
+        val styleCard = ConceptComponents.createCard(activity, tokens, density)
+        styleCard.addView(ConceptComponents.createCardHeader(activity, "KEY SURFACE STYLE", tokens, density, R.drawable.ic_sliders))
 
         val styleOptions = listOf(
             Skins.STYLE_DEFAULT to "Default Flat",
@@ -1085,27 +1448,6 @@ class ConceptScreens(
         )
         val curStyle = p.getString(Skins.KEY_KEY_STYLE, Skins.STYLE_DEFAULT) ?: Skins.STYLE_DEFAULT
 
-        val styleHeader = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16f), dp(10f), dp(16f), dp(4f))
-        }
-        val styleIv = ImageView(activity).apply {
-            val d = ContextCompat.getDrawable(context, R.drawable.ic_sliders)?.mutate()
-            d?.setTint(tokens.accent)
-            setImageDrawable(d)
-            layoutParams = LinearLayout.LayoutParams(dp(18f), dp(18f)).apply { marginEnd = dp(8f) }
-        }
-        styleHeader.addView(styleIv)
-        val styleTv = TextView(activity).apply {
-            text = "KEY SURFACE STYLE"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(tokens.textPrimary)
-        }
-        styleHeader.addView(styleTv)
-        card1.addView(styleHeader)
-
         val styleScroll = HorizontalScrollView(activity).apply {
             isHorizontalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -1114,6 +1456,31 @@ class ConceptScreens(
         val styleRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+        }
+
+        data class StyleViewEntry(val styleId: String, val box: FrameLayout, val checkIv: ImageView, val nameTv: TextView)
+        val styleEntries = mutableListOf<StyleViewEntry>()
+
+        fun updateStyleSelection(newStyleId: String, styleName: String) {
+            for (entry in styleEntries) {
+                val isSel = entry.styleId == newStyleId
+                entry.box.background = GradientDrawable().apply {
+                    cornerRadius = dp(10f).toFloat()
+                    setColor(tokens.chipBg)
+                    if (isSel) {
+                        setStroke(dp(2f), tokens.accent)
+                    } else {
+                        setStroke(dp(1f), tokens.cardBorder)
+                    }
+                }
+                entry.checkIv.visibility = if (isSel) View.VISIBLE else View.GONE
+                entry.nameTv.setTextColor(if (isSel) tokens.accent else tokens.textSecondary)
+                entry.nameTv.setTypeface(null, if (isSel) Typeface.BOLD else Typeface.NORMAL)
+            }
+            p.edit().putString(Skins.KEY_KEY_STYLE, newStyleId).apply()
+            p.edit().putString("settings_ui_style", if (newStyleId == Skins.STYLE_STROKE) "stroke" else if (newStyleId == Skins.STYLE_NEUMORPHIC) "neumorphic" else "md3").apply()
+            activity.notifySettingsChanged(restart = true)
+            activity.showToast("Applied key style: $styleName")
         }
 
         for ((styleId, styleName) in styleOptions) {
@@ -1150,24 +1517,23 @@ class ConceptScreens(
             }
             box.addView(previewCap)
 
-            if (isSelected) {
-                val checkIv = ImageView(activity).apply {
-                    val d = ContextCompat.getDrawable(context, R.drawable.ic_check)?.mutate()
-                    d?.setTint(Color.WHITE)
-                    setImageDrawable(d)
-                    scaleType = ImageView.ScaleType.CENTER_INSIDE
-                    val pad = dp(2f)
-                    setPadding(pad, pad, pad, pad)
-                    layoutParams = FrameLayout.LayoutParams(dp(14f), dp(14f), Gravity.TOP or Gravity.END).apply {
-                        setMargins(0, dp(3f), dp(3f), 0)
-                    }
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(tokens.accent)
-                    }
+            val checkIv = ImageView(activity).apply {
+                val d = ContextCompat.getDrawable(context, R.drawable.ic_check)?.mutate()
+                d?.setTint(Color.WHITE)
+                setImageDrawable(d)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                val pad = dp(2f)
+                setPadding(pad, pad, pad, pad)
+                layoutParams = FrameLayout.LayoutParams(dp(14f), dp(14f), Gravity.TOP or Gravity.END).apply {
+                    setMargins(0, dp(3f), dp(3f), 0)
                 }
-                box.addView(checkIv)
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(tokens.accent)
+                }
+                visibility = if (isSelected) View.VISIBLE else View.GONE
             }
+            box.addView(checkIv)
             itemCol.addView(box)
 
             val nameTv = TextView(activity).apply {
@@ -1182,22 +1548,19 @@ class ConceptScreens(
             itemCol.addView(nameTv)
 
             itemCol.setOnClickListener {
-                p.edit().putString(Skins.KEY_KEY_STYLE, styleId).apply()
-                p.edit().putString("settings_ui_style", if (styleId == Skins.STYLE_STROKE) "stroke" else if (styleId == Skins.STYLE_NEUMORPHIC) "neumorphic" else "md3").apply()
-                activity.notifySettingsChanged(restart = true)
-                activity.reloadTheme()
-                onThemeChanged()
+                updateStyleSelection(styleId, styleName)
             }
 
+            styleEntries.add(StyleViewEntry(styleId, box, checkIv, nameTv))
             styleRow.addView(itemCol)
         }
         styleScroll.addView(styleRow)
-        card1.addView(styleScroll)
+        styleCard.addView(styleScroll)
+        root.addView(styleCard)
 
-        root.addView(card1)
-
-        val card2 = ConceptComponents.createCard(activity, tokens, density)
-        card2.addView(ConceptComponents.createCardHeader(activity, "KEY GEOMETRY & SHAPES", tokens, density, R.drawable.ic_sliders))
+        // Card 6: Key Geometry & Shapes
+        val shapeCard = ConceptComponents.createCard(activity, tokens, density)
+        shapeCard.addView(ConceptComponents.createCardHeader(activity, "KEY GEOMETRY & SHAPES", tokens, density, R.drawable.ic_sliders))
 
         val shapeOptions = listOf(
             Skins.SHAPE_ROUNDED to "Rounded",
@@ -1209,27 +1572,6 @@ class ConceptScreens(
         )
         val curShape = p.getString(Skins.KEY_STUDIO_SHAPE, Skins.SHAPE_ROUNDED) ?: Skins.SHAPE_ROUNDED
 
-        val shapeHeader = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16f), dp(10f), dp(16f), dp(4f))
-        }
-        val shapeIv = ImageView(activity).apply {
-            val d = ContextCompat.getDrawable(context, R.drawable.ic_sparkles)?.mutate()
-            d?.setTint(tokens.accent)
-            setImageDrawable(d)
-            layoutParams = LinearLayout.LayoutParams(dp(18f), dp(18f)).apply { marginEnd = dp(8f) }
-        }
-        shapeHeader.addView(shapeIv)
-        val shapeTv = TextView(activity).apply {
-            text = "KEY SHAPE GEOMETRY"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(tokens.textPrimary)
-        }
-        shapeHeader.addView(shapeTv)
-        card2.addView(shapeHeader)
-
         val shapeScroll = HorizontalScrollView(activity).apply {
             isHorizontalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -1238,6 +1580,30 @@ class ConceptScreens(
         val shapeRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+        }
+
+        data class ShapeViewEntry(val shapeId: String, val box: FrameLayout, val checkIv: ImageView, val nameTv: TextView)
+        val shapeEntries = mutableListOf<ShapeViewEntry>()
+
+        fun updateShapeSelection(newShapeId: String, shapeName: String) {
+            for (entry in shapeEntries) {
+                val isSel = entry.shapeId == newShapeId
+                entry.box.background = GradientDrawable().apply {
+                    cornerRadius = dp(10f).toFloat()
+                    setColor(tokens.chipBg)
+                    if (isSel) {
+                        setStroke(dp(2f), tokens.accent)
+                    } else {
+                        setStroke(dp(1f), tokens.cardBorder)
+                    }
+                }
+                entry.checkIv.visibility = if (isSel) View.VISIBLE else View.GONE
+                entry.nameTv.setTextColor(if (isSel) tokens.accent else tokens.textSecondary)
+                entry.nameTv.setTypeface(null, if (isSel) Typeface.BOLD else Typeface.NORMAL)
+            }
+            p.edit().putString(Skins.KEY_STUDIO_SHAPE, newShapeId).apply()
+            activity.notifySettingsChanged(restart = true)
+            activity.showToast("Applied key shape: $shapeName")
         }
 
         for ((shapeId, shapeName) in shapeOptions) {
@@ -1274,25 +1640,23 @@ class ConceptScreens(
             }
             box.addView(keyCap)
 
-            if (isSelected) {
-                val checkIv = ImageView(activity).apply {
-                    val d = ContextCompat.getDrawable(context, R.drawable.ic_check)?.mutate()
-                    d?.setTint(Color.WHITE)
-                    setImageDrawable(d)
-                    scaleType = ImageView.ScaleType.CENTER_INSIDE
-                    val pad = dp(2f)
-                    setPadding(pad, pad, pad, pad)
-                    layoutParams = FrameLayout.LayoutParams(dp(14f), dp(14f), Gravity.TOP or Gravity.END).apply {
-                        setMargins(0, dp(3f), dp(3f), 0)
-                    }
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(tokens.accent)
-                    }
+            val checkIv = ImageView(activity).apply {
+                val d = ContextCompat.getDrawable(context, R.drawable.ic_check)?.mutate()
+                d?.setTint(Color.WHITE)
+                setImageDrawable(d)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                val pad = dp(2f)
+                setPadding(pad, pad, pad, pad)
+                layoutParams = FrameLayout.LayoutParams(dp(14f), dp(14f), Gravity.TOP or Gravity.END).apply {
+                    setMargins(0, dp(3f), dp(3f), 0)
                 }
-                box.addView(checkIv)
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(tokens.accent)
+                }
+                visibility = if (isSelected) View.VISIBLE else View.GONE
             }
-
+            box.addView(checkIv)
             itemCol.addView(box)
 
             val nameTv = TextView(activity).apply {
@@ -1307,398 +1671,53 @@ class ConceptScreens(
             itemCol.addView(nameTv)
 
             itemCol.setOnClickListener {
-                p.edit().putString(Skins.KEY_STUDIO_SHAPE, shapeId).apply()
-                activity.notifySettingsChanged(restart = true)
-                activity.reloadTheme()
-                onThemeChanged()
+                updateShapeSelection(shapeId, shapeName)
             }
 
+            shapeEntries.add(ShapeViewEntry(shapeId, box, checkIv, nameTv))
             shapeRow.addView(itemCol)
         }
         shapeScroll.addView(shapeRow)
-        card2.addView(shapeScroll)
+        shapeCard.addView(shapeScroll)
 
-        card2.addView(ConceptComponents.createSwitchRow(
+        shapeCard.addView(ConceptComponents.createSwitchRow(
             activity, "Key Outlines", "Render border outline around individual keys",
-            p.getBoolean(Skins.KEY_KEY_BORDERS, false), tokens, density, R.drawable.ic_pen_line
+            p.getBoolean(Skins.KEY_KEY_BORDERS, true), tokens, density, R.drawable.ic_pen_line
         ) { v ->
             p.edit().putBoolean(Skins.KEY_KEY_BORDERS, v).apply()
             activity.notifySettingsChanged(restart = true)
         })
 
-        card2.addView(ConceptComponents.createSliderRow(
+        shapeCard.addView(ConceptComponents.createSliderRow(
             context = activity, title = "Corner Radius", subtitle = "Roundness of individual keyboard keys",
-            min = 0, max = 28, current = p.getInt(Skins.KEY_STUDIO_RADIUS, 12),
+            min = 0, max = 28, current = Skins.prefInt(p, Skins.KEY_STUDIO_RADIUS, 12),
             suffix = "dp", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
             defaultValue = 12
         ) { v ->
-            p.edit().putInt(Skins.KEY_STUDIO_RADIUS, v).apply()
+            p.edit().putFloat(Skins.KEY_STUDIO_RADIUS, v.toFloat()).putInt(Skins.KEY_STUDIO_RADIUS, v).apply()
             activity.notifySettingsChanged(restart = true)
         })
 
-        card2.addView(ConceptComponents.createSliderRow(
+        shapeCard.addView(ConceptComponents.createSliderRow(
             context = activity, title = "Border Width", subtitle = "Thickness of outer key outlines",
-            min = 0, max = 4, current = p.getInt(Skins.KEY_STUDIO_BORDER_WIDTH, 1),
+            min = 0, max = 4, current = Skins.prefInt(p, Skins.KEY_STUDIO_BORDER_WIDTH, 1),
             suffix = "dp", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
             defaultValue = 1
         ) { v ->
-            p.edit().putInt(Skins.KEY_STUDIO_BORDER_WIDTH, v).apply()
+            p.edit().putFloat(Skins.KEY_STUDIO_BORDER_WIDTH, v.toFloat()).putInt(Skins.KEY_STUDIO_BORDER_WIDTH, v).apply()
             activity.notifySettingsChanged(restart = true)
         })
 
-        card2.addView(ConceptComponents.createSliderRow(
+        shapeCard.addView(ConceptComponents.createSliderRow(
             context = activity, title = "Shadow & Elevation", subtitle = "Depth shadow underneath key surfaces",
-            min = 0, max = 12, current = p.getInt(Skins.KEY_STUDIO_SHADOW, 2),
+            min = 0, max = 12, current = Skins.prefInt(p, Skins.KEY_STUDIO_SHADOW, 2),
             suffix = "dp", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
             defaultValue = 2
         ) { v ->
-            p.edit().putInt(Skins.KEY_STUDIO_SHADOW, v).apply()
+            p.edit().putFloat(Skins.KEY_STUDIO_SHADOW, v.toFloat()).putInt(Skins.KEY_STUDIO_SHADOW, v).apply()
             activity.notifySettingsChanged(restart = true)
         })
-        root.addView(card2)
-
-        val card3 = ConceptComponents.createCard(activity, tokens, density)
-        card3.addView(ConceptComponents.createCardHeader(activity, "DIMENSIONS & SPACING", tokens, density, R.drawable.ic_sliders))
-
-        card3.addView(ConceptComponents.createSliderRow(
-            context = activity, title = "Keyboard Height", subtitle = "Overall height of the keyboard frame",
-            min = 60, max = 150, current = p.getInt(Skins.KEY_KEYBOARD_HEIGHT, 100),
-            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-            defaultValue = 100
-        ) { v ->
-            p.edit().putInt(Skins.KEY_KEYBOARD_HEIGHT, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        card3.addView(ConceptComponents.createSliderRow(
-            context = activity, title = "Key Width Scale", subtitle = "Horizontal stretch and margin proportion",
-            min = 70, max = 130, current = p.getInt(Skins.KEY_KEY_TILE_WIDTH, Skins.DEFAULT_KEY_TILE_WIDTH),
-            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-            defaultValue = Skins.DEFAULT_KEY_TILE_WIDTH
-        ) { v ->
-            p.edit().putInt(Skins.KEY_KEY_TILE_WIDTH, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        card3.addView(ConceptComponents.createSliderRow(
-            context = activity, title = "Key Height Scale", subtitle = "Vertical key footprint scale",
-            min = 70, max = 130, current = p.getInt(Skins.KEY_KEY_TILE_SIZE, Skins.DEFAULT_KEY_TILE_SIZE),
-            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-            defaultValue = Skins.DEFAULT_KEY_TILE_SIZE
-        ) { v ->
-            p.edit().putInt(Skins.KEY_KEY_TILE_SIZE, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        card3.addView(ConceptComponents.createSliderRow(
-            context = activity, title = "Horizontal Gap", subtitle = "Spacing between adjacent keys in rows",
-            min = 0, max = 12, current = p.getInt(Skins.KEY_STUDIO_H_GAP, 3),
-            suffix = "dp", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-            defaultValue = 3
-        ) { v ->
-            p.edit().putInt(Skins.KEY_STUDIO_H_GAP, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        card3.addView(ConceptComponents.createSliderRow(
-            context = activity, title = "Vertical Gap", subtitle = "Spacing between rows of keys",
-            min = 0, max = 16, current = p.getInt(Skins.KEY_STUDIO_V_GAP, 4),
-            suffix = "dp", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-            defaultValue = 4
-        ) { v ->
-            p.edit().putInt(Skins.KEY_STUDIO_V_GAP, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        card3.addView(ConceptComponents.createSliderRow(
-            context = activity, title = "Side Margin Padding", subtitle = "Left and right padding from screen edges",
-            min = 0, max = 24, current = p.getInt(Skins.KEY_STUDIO_SIDE_PADDING, 4),
-            suffix = "dp", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-            defaultValue = 4
-        ) { v ->
-            p.edit().putInt(Skins.KEY_STUDIO_SIDE_PADDING, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        card3.addView(ConceptComponents.createSliderRow(
-            context = activity, title = "Bottom Navigation Gap", subtitle = "Distance above Android navigation bar",
-            min = 0, max = 40, current = p.getInt(Skins.KEY_STUDIO_BOTTOM_PADDING, 6),
-            suffix = "dp", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-            defaultValue = 6
-        ) { v ->
-            p.edit().putInt(Skins.KEY_STUDIO_BOTTOM_PADDING, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-        root.addView(card3)
-
-        val card4 = ConceptComponents.createCard(activity, tokens, density)
-        card4.addView(ConceptComponents.createCardHeader(activity, "TYPOGRAPHY & FONTS", tokens, density, R.drawable.ic_type))
-
-        card4.addView(ConceptComponents.createSwitchRow(
-            activity, "Use System Font", "Follow default Android device typography",
-            p.getBoolean(Skins.KEY_USE_SYSTEM_FONT, Skins.DEFAULT_USE_SYSTEM_FONT), tokens, density, R.drawable.ic_type
-        ) { v ->
-            p.edit().putBoolean(Skins.KEY_USE_SYSTEM_FONT, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        val fontOptions = listOf(
-            Skins.FONT_DEFAULT to "Inter Default",
-            Skins.FONT_ROUNDED to "Rounded Soft",
-            Skins.FONT_SERIF to "Editorial Serif",
-            Skins.FONT_MONO to "Code Monospace",
-            Skins.FONT_CONDENSED to "Condensed Compact",
-            Skins.FONT_LIGHT to "Clean Light"
-        )
-        val curFont = p.getString(Skins.KEY_STUDIO_FONT, Skins.FONT_DEFAULT) ?: Skins.FONT_DEFAULT
-
-        val fontHeader = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16f), dp(10f), dp(16f), dp(4f))
-        }
-        val fontIv = ImageView(activity).apply {
-            val d = ContextCompat.getDrawable(context, R.drawable.ic_type)?.mutate()
-            d?.setTint(tokens.accent)
-            setImageDrawable(d)
-            layoutParams = LinearLayout.LayoutParams(dp(18f), dp(18f)).apply { marginEnd = dp(8f) }
-        }
-        fontHeader.addView(fontIv)
-        val fontTv = TextView(activity).apply {
-            text = "FONT STYLE"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(tokens.textPrimary)
-        }
-        fontHeader.addView(fontTv)
-        card4.addView(fontHeader)
-
-        val fontScroll = HorizontalScrollView(activity).apply {
-            isHorizontalScrollBarEnabled = false
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            setPadding(dp(12f), dp(4f), dp(12f), dp(10f))
-        }
-        val fontRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        for ((fontId, fontName) in fontOptions) {
-            val isSelected = curFont == fontId
-
-            val itemCol = LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER_HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(dp(82f), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    marginStart = dp(4f)
-                    marginEnd = dp(4f)
-                }
-                isClickable = true
-                isFocusable = true
-            }
-
-            val box = FrameLayout(activity).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(74f), dp(44f)).apply {
-                    bottomMargin = dp(4f)
-                }
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(10f).toFloat()
-                    setColor(tokens.chipBg)
-                    if (isSelected) {
-                        setStroke(dp(2f), tokens.accent)
-                    } else {
-                        setStroke(dp(1f), tokens.cardBorder)
-                    }
-                }
-            }
-
-            val sampleTv = TextView(activity).apply {
-                text = "Ag"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-                try {
-                    typeface = Skins.resolveTypeface(activity, fontStyle = fontId, bold = true)
-                } catch (_: Exception) {
-                    typeface = Typeface.DEFAULT_BOLD
-                }
-                setTextColor(if (isSelected) tokens.accent else tokens.textPrimary)
-                gravity = Gravity.CENTER
-                layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER)
-            }
-            box.addView(sampleTv)
-
-            if (isSelected) {
-                val checkIv = ImageView(activity).apply {
-                    val d = ContextCompat.getDrawable(context, R.drawable.ic_check)?.mutate()
-                    d?.setTint(Color.WHITE)
-                    setImageDrawable(d)
-                    scaleType = ImageView.ScaleType.CENTER_INSIDE
-                    val pad = dp(2f)
-                    setPadding(pad, pad, pad, pad)
-                    layoutParams = FrameLayout.LayoutParams(dp(14f), dp(14f), Gravity.TOP or Gravity.END).apply {
-                        setMargins(0, dp(3f), dp(3f), 0)
-                    }
-                    background = GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
-                        setColor(tokens.accent)
-                    }
-                }
-                box.addView(checkIv)
-            }
-            itemCol.addView(box)
-
-            val nameTv = TextView(activity).apply {
-                text = fontName
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
-                setTextColor(if (isSelected) tokens.accent else tokens.textSecondary)
-                setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
-                gravity = Gravity.CENTER
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-            }
-            itemCol.addView(nameTv)
-
-            itemCol.setOnClickListener {
-                p.edit().putString(Skins.KEY_STUDIO_FONT, fontId).apply()
-                activity.notifySettingsChanged(restart = true)
-                activity.reloadTheme()
-                onThemeChanged()
-            }
-
-            fontRow.addView(itemCol)
-        }
-        fontScroll.addView(fontRow)
-        card4.addView(fontScroll)
-
-        card4.addView(
-            ConceptComponents.createNavRow(
-                activity, "Custom Fonts Store", "Download & apply custom typefaces from remote store",
-                null, tokens, density, R.drawable.ic_download, true
-            ) { activity.showFontStoreDialog() }
-        )
-
-        card4.addView(ConceptComponents.createSwitchRow(
-            activity, "Bold Key Labels", "Render key letters with heavy bold typeface weight",
-            p.getBoolean(Skins.KEY_STUDIO_FONT_BOLD, true), tokens, density, R.drawable.ic_type
-        ) { v ->
-            p.edit().putBoolean(Skins.KEY_STUDIO_FONT_BOLD, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        card4.addView(ConceptComponents.createFloatSliderRow(
-            context = activity, title = "Key Font Scale", subtitle = "Proportional letter character size",
-            min = 0.80f, max = 1.30f, current = Skins.prefFloat(p, Skins.KEY_STUDIO_FONT_SCALE, 1.0f),
-            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 0.01f,
-            defaultValue = 1.0f
-        ) { v ->
-            p.edit().putFloat(Skins.KEY_STUDIO_FONT_SCALE, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-        root.addView(card4)
-
-        val card5 = ConceptComponents.createCard(activity, tokens, density)
-        card5.addView(ConceptComponents.createCardHeader(activity, "LANDSCAPE PROFILE", tokens, density, R.drawable.ic_smartphone))
-
-        card5.addView(ConceptComponents.createSwitchRow(
-            activity, "Custom Landscape Profile", "Use independent dimensions when device is rotated horizontally",
-            p.getBoolean(Skins.KEY_LANDSCAPE_CUSTOM, false), tokens, density, R.drawable.ic_smartphone
-        ) { v ->
-            p.edit().putBoolean(Skins.KEY_LANDSCAPE_CUSTOM, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        card5.addView(ConceptComponents.createSwitchRow(
-            activity, "Landscape Split Keyboard", "Split left and right halves for easy two-thumb typing",
-            p.getBoolean(Skins.KEY_LANDSCAPE_SPLIT, false), tokens, density, R.drawable.ic_sliders
-        ) { v ->
-            p.edit().putBoolean(Skins.KEY_LANDSCAPE_SPLIT, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        card5.addView(ConceptComponents.createSliderRow(
-            context = activity, title = "Landscape Height", subtitle = "Keyboard vertical footprint in landscape",
-            min = 50, max = 120, current = p.getInt(Skins.KEY_LANDSCAPE_HEIGHT, 80),
-            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-            defaultValue = 80
-        ) { v ->
-            p.edit().putInt(Skins.KEY_LANDSCAPE_HEIGHT, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        card5.addView(ConceptComponents.createSliderRow(
-            context = activity, title = "Landscape Horizontal Gap", subtitle = "Space between keys in landscape",
-            min = 0, max = 16, current = p.getInt(Skins.KEY_LANDSCAPE_H_GAP, 4),
-            suffix = "dp", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-            defaultValue = 4
-        ) { v ->
-            p.edit().putInt(Skins.KEY_LANDSCAPE_H_GAP, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-        root.addView(card5)
-
-        val card6 = ConceptComponents.createCard(activity, tokens, density)
-        card6.addView(ConceptComponents.createCardHeader(activity, "CUSTOM PHOTO BACKGROUND", tokens, density, R.drawable.ic_eye))
-
-        val photoButtonsRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(14f), dp(4f), dp(14f), dp(8f))
-        }
-        val chooseBtn = ConceptComponents.createPillButton(activity, "Choose Photo", tokens, density, true) {
-            val intent = Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
-            activity.pickBackground.launch(intent)
-        }
-        chooseBtn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6f) }
-        photoButtonsRow.addView(chooseBtn)
-
-        val cropBtn = ConceptComponents.createPillButton(activity, "Crop Photo", tokens, density, false) {
-            activity.showCropDialog()
-        }
-        cropBtn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        photoButtonsRow.addView(cropBtn)
-        card6.addView(photoButtonsRow)
-
-        card6.addView(ConceptComponents.createSliderRow(
-            context = activity, title = "Background Dim Level", subtitle = "Darken photo overlay for maximum key contrast",
-            min = 0, max = 100, current = p.getInt(Skins.KEY_DIM, 35),
-            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
-            defaultValue = 35
-        ) { v ->
-            p.edit().putInt(Skins.KEY_DIM, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
-        val removeBtn = ConceptComponents.createPillButton(activity, "Remove Photo Background", tokens, density, false) {
-            CustomBackground.remove(activity)
-            activity.notifySettingsChanged(restart = true)
-            activity.showToast("Custom photo removed")
-        }
-        val removeBox = LinearLayout(activity).apply {
-            setPadding(dp(14f), dp(4f), dp(14f), dp(12f))
-            addView(removeBtn)
-        }
-        card6.addView(removeBox)
-        root.addView(card6)
-
-        val card7 = ConceptComponents.createCard(activity, tokens, density)
-        card7.addView(ConceptComponents.createCardHeader(activity, "THEME BACKUP & SHARE", tokens, density, R.drawable.ic_refresh_cw))
-
-        val shareRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(14f), dp(4f), dp(14f), dp(12f))
-        }
-        val exportBtn = ConceptComponents.createPillButton(activity, "Export Theme", tokens, density, false) {
-            val json = Skins.exportThemeJson(activity)
-            activity.exportThemeLauncher.launch("gnosis_theme_${System.currentTimeMillis()}.json")
-        }
-        exportBtn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6f) }
-        shareRow.addView(exportBtn)
-
-        val importBtn = ConceptComponents.createPillButton(activity, "Import Theme", tokens, density, false) {
-            activity.importThemeLauncher.launch(arrayOf("application/json", "text/plain"))
-        }
-        importBtn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        shareRow.addView(importBtn)
-        card7.addView(shareRow)
-        root.addView(card7)
+        root.addView(shapeCard)
 
         return root
     }
@@ -1715,7 +1734,7 @@ class ConceptScreens(
             ConceptComponents.createHeroBrandCard(
                 context = activity,
                 title = "Language & Dictionary",
-                description = "Manage input languages, layout styles, offline Hinglish dictionary packs, and toolbar quick keys.",
+                description = "Manage keyboard layout styles, system language settings, and toolbar quick keys.",
                 iconRes = R.drawable.ic_globe,
                 tokens = tokens,
                 density = density
@@ -1723,43 +1742,13 @@ class ConceptScreens(
         )
 
         val card1 = ConceptComponents.createCard(activity, tokens, density)
-        val isSystemMode = gnosis.keyboard.engine.language.GnosisLanguageManager.isSystemLanguageMode(activity)
-        val activeLang = gnosis.keyboard.engine.language.GnosisLanguageManager.resolveEffectiveLanguage(activity)
-
-        card1.addView(ConceptComponents.createCardHeader(activity, "NEURAL AI LANGUAGE & REGION", tokens, density, R.drawable.ic_globe))
-
-        card1.addView(
-            ConceptComponents.createSwitchRow(
-                activity, "Follow Phone Region / Language",
-                "Automatically adapt neural predictions, autocorrect, and dictionaries to device locale (" + java.util.Locale.getDefault().displayName + ")",
-                isSystemMode, tokens, density, R.drawable.ic_globe
-            ) { enabled ->
-                val mode = if (enabled) Skins.MODE_LANG_SYSTEM else Skins.MODE_LANG_MANUAL
-                gnosis.keyboard.engine.language.GnosisLanguageManager.setLanguageMode(activity, mode)
-                EngineFactory.invalidateCache()
-                activity.notifySettingsChanged(restart = true)
-                activity.refreshCurrentScreen()
-            }
-        )
-
+        card1.addView(ConceptComponents.createCardHeader(activity, "SYSTEM LOCALE & INPUT", tokens, density, R.drawable.ic_globe))
         card1.addView(
             ConceptComponents.createNavRow(
-                activity, "Active Keyboard Language",
-                if (isSystemMode) "Auto: " + activeLang.name + " (" + activeLang.nativeName + ")" else activeLang.name + " (" + activeLang.nativeName + ")",
-                activeLang.shortLabel, tokens, density, R.drawable.ic_check, true
-            ) {
-                activity.showLanguageSelectorDialog {
-                    activity.refreshCurrentScreen()
-                }
-            }
-        )
-
-        card1.addView(
-            ConceptComponents.createNavRow(
-                activity, "System Language Settings", "Add more keyboard languages from Android settings",
+                activity, "System Language Settings", "Adapting automatically to device locale (${java.util.Locale.getDefault().displayName})",
                 null, tokens, density, R.drawable.ic_sliders, true
             ) {
-                activity.startActivity(Intent(Settings.ACTION_LOCALE_SETTINGS))
+                activity.startActivity(Intent(android.provider.Settings.ACTION_LOCALE_SETTINGS))
             }
         )
         root.addView(card1)
@@ -1768,8 +1757,63 @@ class ConceptScreens(
         card2.addView(ConceptComponents.createCardHeader(activity, "KEYBOARD LAYOUT & STYLE", tokens, density, R.drawable.ic_keyboard))
 
         val styleOptions = listOf("Revamped (Modern)", "Classics (Standard)")
-        val curStyle = p.getString(Skins.KEY_LAYOUT_STYLE, Skins.STYLE_REVAMPED) ?: Skins.STYLE_REVAMPED
+        var curStyle = p.getString(Skins.KEY_LAYOUT_STYLE, Skins.STYLE_REVAMPED) ?: Skins.STYLE_REVAMPED
         val styleIdx = if (curStyle == Skins.STYLE_CLASSICS) 1 else 0
+
+        val toolbarSizeContainer = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+
+        fun refreshToolbarSizeOption(activeStyle: String) {
+            toolbarSizeContainer.removeAllViews()
+            if (activeStyle == Skins.STYLE_REVAMPED) {
+                toolbarSizeContainer.addView(
+                    ConceptComponents.createSliderRow(
+                        context = activity,
+                        title = "Revamped Toolbar Icon Size",
+                        subtitle = "Icon dimensions for modern pill toolbar (Lucid layout)",
+                        min = 22,
+                        max = 44,
+                        current = Skins.prefInt(p, Skins.KEY_REVAMPED_TOOLBAR_ICON_SIZE, Skins.DEFAULT_REVAMPED_TOOLBAR_ICON_SIZE),
+                        suffix = "dp",
+                        tokens = tokens,
+                        density = density,
+                        iconRes = R.drawable.ic_scaling,
+                        step = 1,
+                        defaultValue = Skins.DEFAULT_REVAMPED_TOOLBAR_ICON_SIZE
+                    ) { v ->
+                        p.edit().putInt(Skins.KEY_REVAMPED_TOOLBAR_ICON_SIZE, v).apply()
+                        activity.notifySettingsChanged(restart = true)
+                        KeyboardService.activeInstance?.restartKeyboard()
+                    }
+                )
+            } else {
+                toolbarSizeContainer.addView(
+                    ConceptComponents.createSliderRow(
+                        context = activity,
+                        title = "Classic Toolbar Icon Size",
+                        subtitle = "Icon dimensions for classic circular toolbar buttons",
+                        min = 24,
+                        max = 50,
+                        current = Skins.prefInt(p, Skins.KEY_CLASSIC_TOOLBAR_ICON_SIZE, Skins.DEFAULT_CLASSIC_TOOLBAR_ICON_SIZE),
+                        suffix = "dp",
+                        tokens = tokens,
+                        density = density,
+                        iconRes = R.drawable.ic_scaling,
+                        step = 1,
+                        defaultValue = Skins.DEFAULT_CLASSIC_TOOLBAR_ICON_SIZE
+                    ) { v ->
+                        p.edit().putInt(Skins.KEY_CLASSIC_TOOLBAR_ICON_SIZE, v).apply()
+                        activity.notifySettingsChanged(restart = true)
+                        KeyboardService.activeInstance?.restartKeyboard()
+                    }
+                )
+            }
+        }
+
+        var cardQuickKeys1: View? = null
+
         card2.addView(
             ConceptComponents.createSegmentSelector(
                 context = activity,
@@ -1779,12 +1823,18 @@ class ConceptScreens(
                 density = density
             ) { idx ->
                 val target = if (idx == 1) Skins.STYLE_CLASSICS else Skins.STYLE_REVAMPED
+                curStyle = target
                 p.edit().putString(Skins.KEY_LAYOUT_STYLE, target).apply()
                 p.edit().putString("settings_layout_style", target).apply()
                 activity.notifySettingsChanged(restart = true)
+                refreshToolbarSizeOption(target)
+                cardQuickKeys1?.visibility = if (target == Skins.STYLE_CLASSICS) View.GONE else View.VISIBLE
                 activity.showToast("Keyboard style: " + (if (idx == 1) "Classics" else "Revamped"))
             }
         )
+
+        refreshToolbarSizeOption(curStyle)
+        card2.addView(toolbarSizeContainer)
 
         val curLayout = p.getString(Skins.KEY_LAYOUT, "qwerty") ?: "qwerty"
         val activeLayoutName = LayoutExtensionManager.getLayout(activity, curLayout).name
@@ -1800,74 +1850,21 @@ class ConceptScreens(
             }
         )
 
-        card2.addView(
+        val card3 = ConceptComponents.createCard(activity, tokens, density)
+        card3.addView(ConceptComponents.createCardHeader(activity, "KEYBOARD LAYOUT GALLERY", tokens, density, R.drawable.ic_keyboard))
+        card3.addView(
             ConceptComponents.createNavRow(
                 activity, "Layout Gallery & Downloader", "Browse layouts with visual key arrangements & previews",
-                null, tokens, density, R.drawable.ic_download, true
+                null, tokens, density, R.drawable.ic_keyboard, true
             ) {
-                activity.showLayoutDownloaderDialog {
-                    activity.refreshCurrentScreen()
-                }
-            }
-        )
-        root.addView(card2)
-
-        val card3 = ConceptComponents.createCard(activity, tokens, density)
-        card3.addView(ConceptComponents.createCardHeader(activity, "ADDITIONAL DICTIONARY PACKS", tokens, density, R.drawable.ic_globe))
-
-        card3.addView(
-            ConceptComponents.createNavRow(
-                activity, "Browse Dictionary Store", "Download multi-language autocorrect wordlists from GitHub",
-                null, tokens, density, R.drawable.ic_download, true
-            ) { activity.showDictionaryStoreDialog() }
-        )
-
-
-
-        val isHinglishInstalled = DictionaryExtensionManager.isInstalled(activity, "hinglish")
-        val hinglishCount = DictionaryExtensionManager.getWordCount(activity, "hinglish")
-        val isHinglishEnabled = DictionaryExtensionManager.isEnabled(activity, "hinglish")
-
-        card3.addView(
-            ConceptComponents.createSwitchRow(
-                activity,
-                "Hinglish Auto-Correction Pack",
-                if (isHinglishInstalled) "Installed \u2022 $hinglishCount words" else "Tap Browse Dictionary Store to download",
-                isHinglishEnabled, tokens, density,
-                if (isHinglishInstalled) R.drawable.ic_check else R.drawable.ic_globe
-            ) { en ->
-                if (isHinglishInstalled) {
-                    DictionaryExtensionManager.setEnabled(activity, "hinglish", en)
-                    activity.notifySettingsChanged(restart = true)
-                } else {
-                    activity.showDictionaryStoreDialog()
-                }
-            }
-        )
-
-        val isEnglishInstalled = DictionaryExtensionManager.isInstalled(activity, "english")
-        val englishCount = DictionaryExtensionManager.getWordCount(activity, "english")
-        val isEnglishEnabled = DictionaryExtensionManager.isEnabled(activity, "english")
-
-        card3.addView(
-            ConceptComponents.createSwitchRow(
-                activity,
-                "English Enhanced Dictionary",
-                if (isEnglishInstalled) "Installed \u2022 $englishCount words" else "Additional English vocabulary pack",
-                isEnglishEnabled, tokens, density,
-                if (isEnglishInstalled) R.drawable.ic_check else R.drawable.ic_globe
-            ) { en ->
-                if (isEnglishInstalled) {
-                    DictionaryExtensionManager.setEnabled(activity, "english", en)
-                    activity.notifySettingsChanged(restart = true)
-                } else {
-                    activity.showDictionaryStoreDialog()
-                }
+                navigateTo(buildLayoutGalleryScreen(), "Layout Gallery")
             }
         )
         root.addView(card3)
 
         val card4 = ConceptComponents.createCard(activity, tokens, density)
+        cardQuickKeys1 = card4
+        card4.visibility = if (curStyle == Skins.STYLE_CLASSICS) View.GONE else View.VISIBLE
         card4.addView(ConceptComponents.createCardHeader(activity, "TOOLBAR QUICK KEYS", tokens, density, R.drawable.ic_sliders))
 
         val quickHint = TextView(activity).apply {
@@ -1995,7 +1992,7 @@ class ConceptScreens(
 
         card4.addView(ConceptComponents.createSliderRow(
             context = activity, title = "Quick Keys Size", subtitle = "Proportion of quick keys on top toolbar",
-            min = 70, max = 130, current = p.getInt(Skins.KEY_QUICK_KEYS_SIZE, Skins.DEFAULT_QUICK_KEYS_SIZE),
+            min = 70, max = 130, current = Skins.prefInt(p, Skins.KEY_QUICK_KEYS_SIZE, Skins.DEFAULT_QUICK_KEYS_SIZE),
             suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
             defaultValue = Skins.DEFAULT_QUICK_KEYS_SIZE
         ) { v ->
@@ -2004,6 +2001,1323 @@ class ConceptScreens(
         })
         root.addView(card4)
         return root
+    }
+
+    fun buildLayoutToolbarScreen(): View {
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(16f), dp(12f), dp(16f), dp(80f))
+        }
+        val p = Skins.prefs(activity)
+
+        root.addView(
+            ConceptComponents.createHeroBrandCard(
+                context = activity,
+                title = "Layout & Toolbar",
+                description = "Switch between Revamped and Classic layouts, adjust toolbar heights and icon sizes with hyper sliders, and configure toolbar quick keys.",
+                iconRes = R.drawable.ic_layout,
+                tokens = tokens,
+                density = density
+            )
+        )
+
+        val card1 = ConceptComponents.createCard(activity, tokens, density)
+        card1.addView(ConceptComponents.createCardHeader(activity, "KEYBOARD LAYOUT ARCHITECTURE", tokens, density, R.drawable.ic_keyboard))
+
+        val styleOptions = listOf("Revamped (Modern)", "Classics (Standard)")
+        var curStyle = p.getString(Skins.KEY_LAYOUT_STYLE, Skins.STYLE_REVAMPED) ?: Skins.STYLE_REVAMPED
+        val styleIdx = if (curStyle == Skins.STYLE_CLASSICS) 1 else 0
+
+        val toolbarSizeContainer = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+
+        fun refreshToolbarSizeOption(activeStyle: String) {
+            toolbarSizeContainer.removeAllViews()
+            if (activeStyle == Skins.STYLE_REVAMPED) {
+                toolbarSizeContainer.addView(
+                    ConceptComponents.createSliderRow(
+                        context = activity,
+                        title = "Revamped Toolbar Height",
+                        subtitle = "Overall height of modern pill toolbar strip",
+                        min = 34,
+                        max = 56,
+                        current = Skins.prefInt(p, Skins.KEY_TOOLBAR_HEIGHT_REVAMPED, Skins.DEFAULT_TOOLBAR_HEIGHT_REVAMPED),
+                        suffix = "dp",
+                        tokens = tokens,
+                        density = density,
+                        iconRes = R.drawable.ic_scaling,
+                        step = 1,
+                        defaultValue = Skins.DEFAULT_TOOLBAR_HEIGHT_REVAMPED
+                    ) { v ->
+                        p.edit().putInt(Skins.KEY_TOOLBAR_HEIGHT_REVAMPED, v).apply()
+                        activity.notifySettingsChanged(restart = true)
+                        KeyboardService.activeInstance?.restartKeyboard()
+                    }
+                )
+                toolbarSizeContainer.addView(
+                    ConceptComponents.createSliderRow(
+                        context = activity,
+                        title = "Revamped Toolbar Icon Size",
+                        subtitle = "Icon dimensions for modern pill toolbar (Lucid layout)",
+                        min = 20,
+                        max = 42,
+                        current = Skins.prefInt(p, Skins.KEY_REVAMPED_TOOLBAR_ICON_SIZE, Skins.DEFAULT_REVAMPED_TOOLBAR_ICON_SIZE),
+                        suffix = "dp",
+                        tokens = tokens,
+                        density = density,
+                        iconRes = R.drawable.ic_scaling,
+                        step = 1,
+                        defaultValue = Skins.DEFAULT_REVAMPED_TOOLBAR_ICON_SIZE
+                    ) { v ->
+                        p.edit().putInt(Skins.KEY_REVAMPED_TOOLBAR_ICON_SIZE, v).apply()
+                        activity.notifySettingsChanged(restart = true)
+                        KeyboardService.activeInstance?.restartKeyboard()
+                    }
+                )
+            } else {
+                toolbarSizeContainer.addView(
+                    ConceptComponents.createSliderRow(
+                        context = activity,
+                        title = "Classic Keyboard Key Height",
+                        subtitle = "Individual keycap height in classic layout",
+                        min = 36,
+                        max = 64,
+                        current = Skins.prefInt(p, Skins.KEY_KEYBOARD_HEIGHT_CLASSIC, Skins.DEFAULT_KEYBOARD_HEIGHT_CLASSIC),
+                        suffix = "dp",
+                        tokens = tokens,
+                        density = density,
+                        iconRes = R.drawable.ic_keyboard,
+                        step = 1,
+                        defaultValue = Skins.DEFAULT_KEYBOARD_HEIGHT_CLASSIC
+                    ) { v ->
+                        p.edit().putInt(Skins.KEY_KEYBOARD_HEIGHT_CLASSIC, v).apply()
+                        activity.notifySettingsChanged(restart = true)
+                        KeyboardService.activeInstance?.restartKeyboard()
+                    }
+                )
+                toolbarSizeContainer.addView(
+                    ConceptComponents.createSliderRow(
+                        context = activity,
+                        title = "Classic Toolbar Height",
+                        subtitle = "Overall height of classic suggestions strip",
+                        min = 36,
+                        max = 58,
+                        current = Skins.prefInt(p, Skins.KEY_TOOLBAR_HEIGHT_CLASSIC, Skins.DEFAULT_TOOLBAR_HEIGHT_CLASSIC),
+                        suffix = "dp",
+                        tokens = tokens,
+                        density = density,
+                        iconRes = R.drawable.ic_scaling,
+                        step = 1,
+                        defaultValue = Skins.DEFAULT_TOOLBAR_HEIGHT_CLASSIC
+                    ) { v ->
+                        p.edit().putInt(Skins.KEY_TOOLBAR_HEIGHT_CLASSIC, v).apply()
+                        activity.notifySettingsChanged(restart = true)
+                        KeyboardService.activeInstance?.restartKeyboard()
+                    }
+                )
+                toolbarSizeContainer.addView(
+                    ConceptComponents.createSliderRow(
+                        context = activity,
+                        title = "Classic Toolbar Icon Size",
+                        subtitle = "Icon dimensions for classic circular toolbar buttons",
+                        min = 22,
+                        max = 48,
+                        current = Skins.prefInt(p, Skins.KEY_CLASSIC_TOOLBAR_ICON_SIZE, Skins.DEFAULT_CLASSIC_TOOLBAR_ICON_SIZE),
+                        suffix = "dp",
+                        tokens = tokens,
+                        density = density,
+                        iconRes = R.drawable.ic_scaling,
+                        step = 1,
+                        defaultValue = Skins.DEFAULT_CLASSIC_TOOLBAR_ICON_SIZE
+                    ) { v ->
+                        p.edit().putInt(Skins.KEY_CLASSIC_TOOLBAR_ICON_SIZE, v).apply()
+                        activity.notifySettingsChanged(restart = true)
+                        KeyboardService.activeInstance?.restartKeyboard()
+                    }
+                )
+            }
+        }
+
+        var cardQuickKeys2: View? = null
+
+        card1.addView(
+            ConceptComponents.createSegmentSelector(
+                context = activity,
+                options = styleOptions,
+                selectedIndex = styleIdx,
+                tokens = tokens,
+                density = density
+            ) { idx ->
+                val target = if (idx == 1) Skins.STYLE_CLASSICS else Skins.STYLE_REVAMPED
+                curStyle = target
+                p.edit().putString(Skins.KEY_LAYOUT_STYLE, target).apply()
+                p.edit().putString("settings_layout_style", target).apply()
+                activity.notifySettingsChanged(restart = true)
+                refreshToolbarSizeOption(target)
+                cardQuickKeys2?.visibility = if (target == Skins.STYLE_CLASSICS) View.GONE else View.VISIBLE
+                activity.showToast("Keyboard style: " + (if (idx == 1) "Classics" else "Revamped"))
+            }
+        )
+
+        refreshToolbarSizeOption(curStyle)
+        card1.addView(toolbarSizeContainer)
+
+        card1.addView(
+            ConceptComponents.createSwitchRow(
+                activity, "Hold Spacebar to Switch Layout", "Long-press the spacebar to switch between Revamped and Classic layouts",
+                p.getBoolean(Skins.KEY_SPACE_HOLD_SWITCH_LAYOUT, Skins.DEFAULT_SPACE_HOLD_SWITCH_LAYOUT), tokens, density, R.drawable.ic_keyboard
+            ) { v ->
+                p.edit().putBoolean(Skins.KEY_SPACE_HOLD_SWITCH_LAYOUT, v).apply()
+                activity.notifySettingsChanged(restart = false)
+            }
+        )
+
+        val curLayout = p.getString(Skins.KEY_LAYOUT, "qwerty") ?: "qwerty"
+        val activeLayoutName = LayoutExtensionManager.getLayout(activity, curLayout).name
+        card1.addView(
+            ConceptComponents.createNavRow(
+                activity, "Active Physical Layout", "Selected character and key arrangement",
+                activeLayoutName, tokens, density, R.drawable.ic_keyboard, true
+            ) {
+                activity.showActiveLayoutSelectorDialog {
+                    activity.refreshCurrentScreen()
+                }
+            }
+        )
+
+        card1.addView(
+            ConceptComponents.createNavRow(
+                activity, "Layout Gallery & Downloader", "Browse layouts with live visual key arrangements & previews",
+                null, tokens, density, R.drawable.ic_keyboard, true
+            ) {
+                navigateTo(buildLayoutGalleryScreen(), "Layout Gallery")
+            }
+        )
+        root.addView(card1)
+
+        val card2 = ConceptComponents.createCard(activity, tokens, density)
+        cardQuickKeys2 = card2
+        card2.visibility = if (curStyle == Skins.STYLE_CLASSICS) View.GONE else View.VISIBLE
+        card2.addView(ConceptComponents.createCardHeader(activity, "TOOLBAR QUICK KEYS", tokens, density, R.drawable.ic_sliders))
+
+        val quickHint = TextView(activity).apply {
+            text = "Tap a slot above, then tap any symbol below to place it:"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextColor(tokens.textSecondary)
+            setPadding(dp(16f), dp(6f), dp(16f), dp(6f))
+        }
+        card2.addView(quickHint)
+
+        val quickKeysList = ToolbarConfig.loadQuick(activity).toMutableList()
+        while (quickKeysList.size < ToolbarConfig.MAX_QUICK) quickKeysList.add(".")
+        var selectedSlot = 0
+
+        val slotBoxesRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(14f), dp(4f), dp(14f), dp(12f))
+        }
+
+        val slotViews = mutableListOf<TextView>()
+        val slotContainers = mutableListOf<FrameLayout>()
+
+        for (i in 0 until ToolbarConfig.MAX_QUICK) {
+            val fl = FrameLayout(activity).apply {
+                layoutParams = LinearLayout.LayoutParams(0, dp(58f), 1f).apply {
+                    if (i > 0) marginStart = dp(8f)
+                }
+                isClickable = true
+                isFocusable = true
+            }
+
+            val tv = TextView(activity).apply {
+                text = quickKeysList.getOrNull(i) ?: ""
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+                setTypeface(null, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            }
+
+            fun updateSlotBox(isSel: Boolean) {
+                if (isSel) {
+                    tv.setTextColor(tokens.accent)
+                    fl.background = GradientDrawable().apply {
+                        cornerRadius = dp(14f).toFloat()
+                        setColor(ColorUtils.setAlphaComponent(tokens.accent, if (tokens.isLight) 30 else 45))
+                        setStroke(dp(2f), tokens.accent)
+                    }
+                } else {
+                    tv.setTextColor(tokens.textPrimary)
+                    fl.background = GradientDrawable().apply {
+                        cornerRadius = dp(14f).toFloat()
+                        setColor(tokens.chipBg)
+                        setStroke(dp(1f), tokens.cardBorder)
+                    }
+                }
+            }
+
+            updateSlotBox(i == selectedSlot)
+
+            fl.setOnClickListener {
+                selectedSlot = i
+                for (j in slotContainers.indices) {
+                    val sTv = slotViews[j]
+                    if (j == selectedSlot) {
+                        sTv.setTextColor(tokens.accent)
+                        slotContainers[j].background = GradientDrawable().apply {
+                            cornerRadius = dp(14f).toFloat()
+                            setColor(ColorUtils.setAlphaComponent(tokens.accent, if (tokens.isLight) 30 else 45))
+                            setStroke(dp(2f), tokens.accent)
+                        }
+                    } else {
+                        sTv.setTextColor(tokens.textPrimary)
+                        slotContainers[j].background = GradientDrawable().apply {
+                            cornerRadius = dp(14f).toFloat()
+                            setColor(tokens.chipBg)
+                            setStroke(dp(1f), tokens.cardBorder)
+                        }
+                    }
+                }
+            }
+
+            fl.addView(tv)
+            slotViews.add(tv)
+            slotContainers.add(fl)
+            slotBoxesRow.addView(fl)
+        }
+        card2.addView(slotBoxesRow)
+
+        val quickScroll = HorizontalScrollView(activity).apply { isHorizontalScrollBarEnabled = false }
+        val quickRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14f), dp(2f), dp(14f), dp(8f))
+        }
+
+        val availableSymbols = listOf(".", ",", "?", "!", "'", "\"", ":", ";", "-", "@", "#", "$", "%", "&", "*", "/", "(", ")", "+", "=")
+        for (sym in availableSymbols) {
+            val tv = TextView(activity).apply {
+                text = sym
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(tokens.textPrimary)
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(8f).toFloat()
+                    setColor(tokens.chipBg)
+                    setStroke(dp(1f), tokens.cardBorder)
+                }
+                setPadding(dp(12f), dp(7f), dp(12f), dp(7f))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginEnd = dp(6f)
+                }
+                setOnClickListener {
+                    quickKeysList[selectedSlot] = sym
+                    slotViews[selectedSlot].text = sym
+                    ToolbarConfig.saveQuick(activity, quickKeysList)
+                    activity.notifySettingsChanged(restart = true)
+                    activity.showToast("Slot ${selectedSlot + 1} set to '$sym'")
+                }
+            }
+            quickRow.addView(tv)
+        }
+        quickScroll.addView(quickRow)
+        card2.addView(quickScroll)
+
+        card2.addView(ConceptComponents.createSliderRow(
+            context = activity, title = "Quick Keys Size", subtitle = "Proportion of quick keys on top toolbar",
+            min = 70, max = 130, current = Skins.prefInt(p, Skins.KEY_QUICK_KEYS_SIZE, Skins.DEFAULT_QUICK_KEYS_SIZE),
+            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
+            defaultValue = Skins.DEFAULT_QUICK_KEYS_SIZE
+        ) { v ->
+            p.edit().putInt(Skins.KEY_QUICK_KEYS_SIZE, v).apply()
+            activity.notifySettingsChanged(restart = true)
+        })
+        root.addView(card2)
+
+        val card3 = ConceptComponents.createCard(activity, tokens, density)
+        card3.addView(ConceptComponents.createCardHeader(activity, "LANDSCAPE PROFILE", tokens, density, R.drawable.ic_smartphone))
+
+        card3.addView(ConceptComponents.createSwitchRow(
+            activity, "Custom Landscape Profile", "Use independent dimensions when device is rotated horizontally",
+            p.getBoolean(Skins.KEY_LANDSCAPE_CUSTOM, false), tokens, density, R.drawable.ic_smartphone
+        ) { v ->
+            p.edit().putBoolean(Skins.KEY_LANDSCAPE_CUSTOM, v).apply()
+            activity.notifySettingsChanged(restart = true)
+        })
+
+        card3.addView(ConceptComponents.createSwitchRow(
+            activity, "Landscape Split Keyboard", "Split left and right halves for easy two-thumb typing",
+            p.getBoolean(Skins.KEY_LANDSCAPE_SPLIT, false), tokens, density, R.drawable.ic_sliders
+        ) { v ->
+            p.edit().putBoolean(Skins.KEY_LANDSCAPE_SPLIT, v).apply()
+            activity.notifySettingsChanged(restart = true)
+        })
+
+        card3.addView(ConceptComponents.createSliderRow(
+            context = activity, title = "Landscape Height", subtitle = "Keyboard vertical footprint in landscape",
+            min = 50, max = 120, current = Skins.prefInt(p, Skins.KEY_LANDSCAPE_HEIGHT, 80),
+            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
+            defaultValue = 80
+        ) { v ->
+            p.edit().putInt(Skins.KEY_LANDSCAPE_HEIGHT, v).apply()
+            activity.notifySettingsChanged(restart = true)
+        })
+
+        card3.addView(ConceptComponents.createSliderRow(
+            context = activity, title = "Landscape Horizontal Gap", subtitle = "Space between keys in landscape",
+            min = 0, max = 16, current = Skins.prefInt(p, Skins.KEY_LANDSCAPE_H_GAP, 4),
+            suffix = "dp", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
+            defaultValue = 4
+        ) { v ->
+            p.edit().putFloat(Skins.KEY_LANDSCAPE_H_GAP, v.toFloat()).putInt(Skins.KEY_LANDSCAPE_H_GAP, v).apply()
+            activity.notifySettingsChanged(restart = true)
+        })
+        root.addView(card3)
+
+        return root
+    }
+
+    fun buildSoundHapticsScreen(): View {
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(16f), dp(12f), dp(16f), dp(80f))
+        }
+        val p = Skins.prefs(activity)
+
+        root.addView(
+            ConceptComponents.createHeroBrandCard(
+                context = activity,
+                title = "Sound & Haptics",
+                description = "Configure audible keypress sound tone schemes, volume levels, and tactile vibration intensity.",
+                iconRes = R.drawable.ic_volume_2,
+                tokens = tokens,
+                density = density
+            )
+        )
+
+        val card1 = ConceptComponents.createCard(activity, tokens, density)
+        card1.addView(ConceptComponents.createCardHeader(activity, "KEYPRESS AUDIO & TONES", tokens, density, R.drawable.ic_volume_2))
+
+        card1.addView(ConceptComponents.createSwitchRow(
+            activity, "Keypress Sound", "Play audible click sound on key tap",
+            p.getBoolean(Skins.KEY_SOUND, false), tokens, density, R.drawable.ic_volume_2
+        ) { v ->
+            p.edit().putBoolean(Skins.KEY_SOUND, v).apply()
+            activity.notifySettingsChanged(restart = false)
+            if (v) activity.playSoundPreview()
+        })
+
+        card1.addView(ConceptComponents.createSliderRow(
+            context = activity, title = "Audio Click Volume", subtitle = "Audible keypress volume level",
+            min = 1, max = 100, current = Skins.prefInt(p, Skins.KEY_SOUND_VOLUME, 80),
+            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_volume_2, step = 1,
+            defaultValue = 80
+        ) { v ->
+            p.edit().putInt(Skins.KEY_SOUND_VOLUME, v).apply()
+            activity.notifySettingsChanged(restart = false)
+            activity.playSoundPreview(volume = v / 100f)
+        })
+
+        val soundTones = KeySounds.TONES
+        val curTone = p.getString(Skins.KEY_SOUND_TONE, "default") ?: "default"
+        card1.addView(
+            ConceptComponents.createChipsRow(
+                context = activity,
+                title = "Sound Tone Scheme",
+                options = soundTones,
+                selectedId = curTone,
+                tokens = tokens,
+                density = density,
+                iconRes = R.drawable.ic_volume_2
+            ) { t ->
+                p.edit().putString(Skins.KEY_SOUND_TONE, t).apply()
+                activity.notifySettingsChanged(restart = false)
+                activity.playSoundPreview(tone = t)
+                val label = soundTones.firstOrNull { it.first == t }?.second ?: "Default"
+                activity.showToast("Sound: $label")
+            }
+        )
+        root.addView(card1)
+
+        val card2 = ConceptComponents.createCard(activity, tokens, density)
+        card2.addView(ConceptComponents.createCardHeader(activity, "TACTILE HAPTIC FEEDBACK", tokens, density, R.drawable.ic_smartphone))
+
+        card2.addView(ConceptComponents.createSwitchRow(
+            activity, "Haptic Feedback", "Vibrate device gently on every keypress",
+            p.getBoolean(Skins.KEY_HAPTIC, false), tokens, density, R.drawable.ic_smartphone
+        ) { v ->
+            p.edit().putBoolean(Skins.KEY_HAPTIC, v).apply()
+            activity.notifySettingsChanged(restart = false)
+            if (v) {
+                try {
+                    gnosis.keyboard.Haptics.buzz(activity, Skins.prefInt(p, Skins.KEY_HAPTIC_PRESSURE, 50))
+                } catch (_: Exception) {}
+            }
+        })
+
+        card2.addView(ConceptComponents.createSliderRow(
+            context = activity, title = "Vibration Strength", subtitle = "Tactile haptic motor vibration intensity",
+            min = 10, max = 100, current = Skins.prefInt(p, Skins.KEY_HAPTIC_PRESSURE, 50),
+            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_smartphone, step = 1,
+            defaultValue = 50
+        ) { v ->
+            p.edit().putInt(Skins.KEY_HAPTIC_PRESSURE, v).apply()
+            activity.notifySettingsChanged(restart = false)
+            try {
+                gnosis.keyboard.Haptics.buzz(activity, v)
+            } catch (_: Exception) {}
+        })
+        root.addView(card2)
+
+        return root
+    }
+
+    fun buildEffectsWallpaperScreen(): View {
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(16f), dp(12f), dp(16f), dp(80f))
+        }
+        val p = Skins.prefs(activity)
+
+        root.addView(
+            ConceptComponents.createHeroBrandCard(
+                context = activity,
+                title = "Effects & Wallpaper",
+                description = "Configure animated keypress particle effects, custom photo backgrounds, and dimming levels.",
+                iconRes = R.drawable.ic_wand_sparkles,
+                tokens = tokens,
+                density = density
+            )
+        )
+
+        val card1 = ConceptComponents.createCard(activity, tokens, density)
+        card1.addView(ConceptComponents.createCardHeader(activity, "KEYPRESS PARTICLE EFFECTS", tokens, density, R.drawable.ic_sparkles))
+
+        val particleOptions = listOf(
+            "off" to "Off",
+            "sparks" to "Neon Sparks",
+            "hearts" to "Floating Hearts",
+            "bubbles" to "Bubble Burst",
+            "stars" to "Glitter Stars",
+            "trail" to "Neon Glow Trail"
+        )
+        val curParticle = p.getString(Skins.KEY_PARTICLE_EFFECTS, Skins.DEFAULT_PARTICLE_EFFECTS) ?: Skins.DEFAULT_PARTICLE_EFFECTS
+        card1.addView(
+            ConceptComponents.createChipsRow(
+                context = activity,
+                title = "Interactive Keypress Effects",
+                options = particleOptions,
+                selectedId = curParticle,
+                tokens = tokens,
+                density = density,
+                iconRes = R.drawable.ic_sparkles
+            ) { styleId ->
+                p.edit().putString(Skins.KEY_PARTICLE_EFFECTS, styleId).apply()
+                activity.notifySettingsChanged(restart = false)
+                val label = particleOptions.firstOrNull { it.first == styleId }?.second ?: "Off"
+                activity.showToast("Effects: $label")
+            }
+        )
+        root.addView(card1)
+
+        val card2 = ConceptComponents.createCard(activity, tokens, density)
+        card2.addView(ConceptComponents.createCardHeader(activity, "CUSTOM PHOTO BACKGROUND", tokens, density, R.drawable.ic_image))
+
+        val bgBtnsRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14f), dp(8f), dp(14f), dp(8f))
+        }
+        val btnH = dp(42f)
+        val padH = dp(4f)
+        val padV = dp(10f)
+
+        val pickBtn = ConceptComponents.createPillButton(activity, "Choose Photo", tokens, density, true) {
+            val intent = Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
+            activity.pickBackground.launch(intent)
+        }.apply {
+            setPadding(padH, padV, padH, padV)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, btnH, 1f).apply { marginEnd = dp(6f) }
+        }
+        bgBtnsRow.addView(pickBtn)
+
+        val cropBtn = ConceptComponents.createPillButton(activity, "Crop Photo", tokens, density, false) {
+            activity.showCropDialog()
+        }.apply {
+            setPadding(padH, padV, padH, padV)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, btnH, 1f).apply { marginEnd = dp(6f) }
+        }
+        bgBtnsRow.addView(cropBtn)
+
+        val removeBtn = ConceptComponents.createPillButton(activity, "Remove Photo", tokens, density, false) {
+            CustomBackground.remove(activity)
+            activity.notifySettingsChanged(restart = true)
+            activity.showToast("Custom background removed")
+            activity.refreshCurrentScreen()
+        }.apply {
+            setPadding(padH, padV, padH, padV)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, btnH, 1f)
+        }
+        bgBtnsRow.addView(removeBtn)
+        card2.addView(bgBtnsRow)
+
+        card2.addView(ConceptComponents.createSliderRow(
+            context = activity, title = "Background Dim Level", subtitle = "Darken photo background for maximum key legibility",
+            min = 0, max = 85, current = Skins.prefInt(p, Skins.KEY_DIM, 20),
+            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 1,
+            defaultValue = 20
+        ) { v ->
+            p.edit().putInt(Skins.KEY_DIM, v).apply()
+            activity.notifySettingsChanged(lightUpdate = true)
+        })
+        root.addView(card2)
+
+        return root
+    }
+
+    fun buildClipboardSnippetsScreen(): View {
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(16f), dp(12f), dp(16f), dp(80f))
+        }
+        val p = Skins.prefs(activity)
+
+        root.addView(
+            ConceptComponents.createHeroBrandCard(
+                context = activity,
+                title = "Clipboard & Snippets",
+                description = "Manage copied text history, screenshot clipboard pasting, privacy scans, and quick shortcuts.",
+                iconRes = R.drawable.ic_clipboard,
+                tokens = tokens,
+                density = density
+            )
+        )
+
+        val card1 = ConceptComponents.createCard(activity, tokens, density)
+        card1.addView(ConceptComponents.createCardHeader(activity, "CLIPBOARD HISTORY", tokens, density, R.drawable.ic_clipboard))
+
+        card1.addView(ConceptComponents.createSwitchRow(
+            activity, "Clipboard History", "Save copied items for quick access from the keyboard toolbar",
+            ClipboardHistory.isEnabled(activity, ClipboardHistory.CAT_TEXT), tokens, density, R.drawable.ic_clipboard
+        ) { v ->
+            ClipboardHistory.setEnabled(activity, ClipboardHistory.CAT_TEXT, v)
+            activity.notifySettingsChanged(restart = false)
+        })
+
+        card1.addView(ConceptComponents.createSwitchRow(
+            activity, "Screenshot & Image Pasting", "Show recently captured screenshots directly in the suggestions strip",
+            ClipboardHistory.isEnabled(activity, ClipboardHistory.CAT_SCREENSHOT), tokens, density, R.drawable.ic_image
+        ) { v ->
+            ClipboardHistory.setEnabled(activity, ClipboardHistory.CAT_SCREENSHOT, v)
+            activity.notifySettingsChanged(restart = false)
+        })
+
+        card1.addView(ConceptComponents.createSwitchRow(
+            activity, "Message Armour Privacy Scan", "Automatically detect and mask sensitive passwords or OTPs in clipboard items",
+            p.getBoolean("message_armour_enabled", true), tokens, density, R.drawable.ic_shield
+        ) { v ->
+            p.edit().putBoolean("message_armour_enabled", v).apply()
+            activity.notifySettingsChanged(restart = false)
+        })
+        root.addView(card1)
+
+        val cardSnippets = ConceptComponents.createCard(activity, tokens, density)
+        cardSnippets.addView(ConceptComponents.createCardHeader(activity, "CANNED SNIPPETS & PINNED PHRASES", tokens, density, R.drawable.ic_clipboard))
+
+        val snippetInputRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14f), dp(8f), dp(14f), dp(8f))
+        }
+        val snippetEt = EditText(activity).apply {
+            hint = "Add canned snippet / response..."
+            setHintTextColor(tokens.textSecondary)
+            setTextColor(tokens.textPrimary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8f).toFloat()
+                setColor(tokens.chipBg)
+                setStroke(dp(1f), tokens.cardBorder)
+            }
+            setPadding(dp(10f), dp(8f), dp(10f), dp(8f))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(8f)
+            }
+        }
+        snippetInputRow.addView(snippetEt)
+
+        val addBtn = ConceptComponents.createPillButton(activity, "Add", tokens, density, true) {
+            val text = snippetEt.text?.toString()?.trim() ?: ""
+            if (text.isNotEmpty()) {
+                ClipboardHistory.addSnippet(activity, text, pinned = true)
+                snippetEt.setText("")
+                activity.notifySettingsChanged(restart = false)
+                activity.showToast("Snippet added successfully")
+                activity.refreshCurrentScreen()
+            }
+        }.apply {
+            setPadding(dp(16f), dp(8f), dp(16f), dp(8f))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38f))
+        }
+        snippetInputRow.addView(addBtn)
+        cardSnippets.addView(snippetInputRow)
+
+        val snippetsList = ClipboardHistory.getItems(activity, null).filter { it.isPinned && !it.isImage }
+        if (snippetsList.isEmpty()) {
+            val emptyTv = TextView(activity).apply {
+                text = "No pinned snippets yet. Add frequently used phrases, email signatures, or addresses above."
+                setTextColor(tokens.textSecondary)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setPadding(dp(14f), dp(4f), dp(14f), dp(12f))
+            }
+            cardSnippets.addView(emptyTv)
+        } else {
+            snippetsList.forEach { item ->
+                val row = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(8f).toFloat()
+                        setColor(tokens.chipBg)
+                        setStroke(dp(1f), tokens.cardBorder)
+                    }
+                    val padH = dp(12f)
+                    val padV = dp(8f)
+                    setPadding(padH, padV, padH, padV)
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        marginStart = dp(14f)
+                        marginEnd = dp(14f)
+                        bottomMargin = dp(6f)
+                    }
+                }
+                val tv = TextView(activity).apply {
+                    text = item.text
+                    setTextColor(tokens.textPrimary)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }
+                row.addView(tv)
+
+                val delBtn = ImageView(activity).apply {
+                    val d = ContextCompat.getDrawable(activity, R.drawable.ic_trash_2)?.mutate()
+                    d?.setTint(tokens.textSecondary)
+                    setImageDrawable(d)
+                    setPadding(dp(4f), dp(4f), dp(4f), dp(4f))
+                    layoutParams = LinearLayout.LayoutParams(dp(28f), dp(28f))
+                    setOnClickListener {
+                        ClipboardHistory.delete(activity, item.id)
+                        activity.notifySettingsChanged(restart = false)
+                        activity.refreshCurrentScreen()
+                    }
+                }
+                row.addView(delBtn)
+                cardSnippets.addView(row)
+            }
+        }
+        root.addView(cardSnippets)
+
+        return root
+    }
+
+    private fun isGoogleSpeechRecognitionInstalled(context: Context): Boolean {
+        val pm = context.packageManager
+        val targetPackages = listOf("com.google.android.googlequicksearchbox", "com.google.android.tts")
+        val intent = Intent(RecognitionService.SERVICE_INTERFACE)
+        val services = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.queryIntentServices(intent, PackageManager.ResolveInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.queryIntentServices(intent, 0)
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val hasService = services.any { info ->
+            targetPackages.any { pkg -> info.serviceInfo?.packageName?.equals(pkg, ignoreCase = true) == true }
+        }
+        if (hasService) return true
+        return targetPackages.any { pkg ->
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    pm.getPackageInfo(pkg, PackageManager.PackageInfoFlags.of(0)) != null
+                } else {
+                    @Suppress("DEPRECATION")
+                    pm.getPackageInfo(pkg, 0) != null
+                }
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    private fun openGoogleSpeechPlayStore(context: Context) {
+        val targetPackage = "com.google.android.googlequicksearchbox"
+        val playStoreUri = Uri.parse("market://details?id=$targetPackage")
+        val playIntent = Intent(Intent.ACTION_VIEW, playStoreUri).apply {
+            setPackage("com.android.vending")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        try {
+            context.startActivity(playIntent)
+        } catch (_: Exception) {
+            try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, playStoreUri).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                })
+            } catch (_: Exception) {
+                try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$targetPackage")).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    })
+                } catch (_: Exception) {
+                    Toast.makeText(context, "Could not open Google Play Store", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun buildVoiceScreen(): View {
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(16f), dp(12f), dp(16f), dp(80f))
+        }
+        val p = Skins.prefs(activity)
+
+        root.addView(
+            ConceptComponents.createHeroBrandCard(
+                context = activity,
+                title = "Voice Typing Studio",
+                description = "Configure speech-to-text dictation engines, microphone toolbar buttons, and audio permissions.",
+                iconRes = R.drawable.ic_mic,
+                tokens = tokens,
+                density = density
+            )
+        )
+
+        val card1 = ConceptComponents.createCard(activity, tokens, density)
+        card1.addView(ConceptComponents.createCardHeader(activity, "VOICE INPUT SETTINGS", tokens, density, R.drawable.ic_mic))
+
+        card1.addView(ConceptComponents.createSwitchRow(
+            activity, "Voice Input Mic Button", "Show dedicated microphone key on toolbar for speech-to-text",
+            p.getBoolean("voice_input_enabled", true), tokens, density, R.drawable.ic_mic
+        ) { v ->
+            p.edit().putBoolean("voice_input_enabled", v).apply()
+            activity.notifySettingsChanged(restart = true)
+        })
+
+        val speechEngines = listOf(
+            "google" to "Google Speech Recognition",
+            "system" to "Android Default Recognizer"
+        )
+        val curEngine = p.getString("setting_speech_engine", "google") ?: "google"
+        card1.addView(
+            ConceptComponents.createChipsRow(
+                context = activity,
+                title = "Speech-to-Text Engine",
+                options = speechEngines,
+                selectedId = curEngine,
+                tokens = tokens,
+                density = density,
+                iconRes = R.drawable.ic_sliders
+            ) { eng ->
+                if (eng == "google") {
+                    if (!isGoogleSpeechRecognitionInstalled(activity)) {
+                        activity.showToast("Google Speech Recognition is not installed. Redirecting to Play Store...")
+                        openGoogleSpeechPlayStore(activity)
+                        return@createChipsRow
+                    }
+                }
+                p.edit().putString("setting_speech_engine", eng).apply()
+                activity.showToast("Voice engine: ${if (eng == "google") "Google Speech Recognition" else "Android Default Recognizer"}")
+            }
+        )
+
+        card1.addView(
+            ConceptComponents.createNavRow(
+                activity, "Test Microphone Permission", "Grant audio record permission for voice typing",
+                null, tokens, density, R.drawable.ic_check, true
+            ) {
+                activity.voiceAudioPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            }
+        )
+        root.addView(card1)
+
+        return root
+    }
+
+    fun buildMaintenanceScreen(): View {
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(16f), dp(12f), dp(16f), dp(80f))
+        }
+        val p = Skins.prefs(activity)
+
+        root.addView(
+            ConceptComponents.createHeroBrandCard(
+                context = activity,
+                title = "System & Maintenance",
+                description = "Restart the keyboard engine, reset settings, backup and share themes, or monitor live diagnostics.",
+                iconRes = R.drawable.ic_settings,
+                tokens = tokens,
+                density = density
+            )
+        )
+
+        val card1 = ConceptComponents.createCard(activity, tokens, density)
+        card1.addView(ConceptComponents.createCardHeader(activity, "SYSTEM OPERATIONS", tokens, density, R.drawable.ic_refresh_cw))
+
+        val restartBox = LinearLayout(activity).apply {
+            setPadding(dp(14f), dp(4f), dp(14f), dp(6f))
+        }
+        val restartBtn = ConceptComponents.createPillButton(activity, "Restart Keyboard Engine", tokens, density, true) {
+            activity.restartKeyboardEngine(showToastMessage = true)
+        }
+        restartBox.addView(restartBtn)
+        card1.addView(restartBox)
+
+        val resetBox = LinearLayout(activity).apply {
+            setPadding(dp(14f), dp(4f), dp(14f), dp(12f))
+        }
+        val resetBtn = ConceptComponents.createPillButton(activity, "Reset All Settings to Defaults", tokens, density, false) {
+            activity.resetToDefault()
+        }
+        resetBox.addView(resetBtn)
+        card1.addView(resetBox)
+        root.addView(card1)
+
+        val card3 = ConceptComponents.createCard(activity, tokens, density)
+        card3.addView(ConceptComponents.createCardHeader(activity, "EXPORT & BACKUP THEME", tokens, density, R.drawable.ic_share_2))
+
+        val shareRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14f), dp(6f), dp(14f), dp(12f))
+        }
+        val exportBtn = ConceptComponents.createPillButton(activity, "Export Theme", tokens, density, true) {
+            activity.exportTheme()
+        }
+        exportBtn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6f) }
+        shareRow.addView(exportBtn)
+
+        val importBtn = ConceptComponents.createPillButton(activity, "Import Theme", tokens, density, false) {
+            activity.importThemeLauncher.launch(arrayOf("application/json", "text/plain"))
+        }
+        importBtn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        shareRow.addView(importBtn)
+        card3.addView(shareRow)
+        root.addView(card3)
+
+        return root
+    }
+
+    fun showCustomAccentColorPickerDialog(initialColor: Int, onColorApplied: (Int) -> Unit) {
+        val density = activity.resources.displayMetrics.density
+        fun dp(v: Float) = (v * density).toInt()
+
+        val dm = activity.resources.displayMetrics
+        val dialogW = (dm.widthPixels * 0.90f).toInt().coerceIn(dp(300f), dp(360f))
+
+        val dialog = Dialog(activity)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            val padH = dp(20f)
+            val padV = dp(20f)
+            setPadding(padH, padV, padH, padV)
+            minimumWidth = dialogW
+            background = GradientDrawable().apply {
+                cornerRadius = dp(24f).toFloat()
+                setColor(tokens.surface)
+                setStroke(dp(1.2f), tokens.cardBorder)
+            }
+            layoutParams = FrameLayout.LayoutParams(dialogW, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.CENTER
+            }
+        }
+
+        // Title Row
+        val titleRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(14f))
+        }
+        val iconBox = FrameLayout(activity).apply {
+            val s = dp(32f)
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(10f) }
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10f).toFloat()
+                setColor(tokens.chipBg)
+                setStroke(dp(1f), tokens.cardBorder)
+            }
+            val iv = ImageView(activity).apply {
+                val d = ContextCompat.getDrawable(context, R.drawable.ic_palette)?.mutate()
+                d?.setTint(tokens.accent)
+                setImageDrawable(d)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                val p = dp(7f)
+                setPadding(p, p, p, p)
+            }
+            addView(iv)
+        }
+        titleRow.addView(iconBox)
+
+        titleRow.addView(TextView(activity).apply {
+            text = "Custom Accent Color"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(tokens.textPrimary)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        root.addView(titleRow)
+
+        val hsv = FloatArray(3)
+        Color.colorToHSV(initialColor, hsv)
+        var currentColor = initialColor
+
+        // Live Preview Box: Shows current color, sample badge, and hex text
+        val previewCard = FrameLayout(activity).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64f)).apply {
+                bottomMargin = dp(14f)
+            }
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16f).toFloat()
+                setColor(currentColor)
+            }
+        }
+
+        val previewContent = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16f), 0, dp(16f), 0)
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+
+        val previewHexTv = TextView(activity).apply {
+            text = String.format(Locale.ROOT, "#%06X", 0xFFFFFF and currentColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(if (ColorUtils.calculateLuminance(currentColor) > 0.45) Color.parseColor("#0F172A") else Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        previewContent.addView(previewHexTv)
+
+        val sampleBadge = TextView(activity).apply {
+            text = "Live Keycap"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTypeface(null, Typeface.BOLD)
+            val onCol = if (ColorUtils.calculateLuminance(currentColor) > 0.45) Color.parseColor("#0F172A") else Color.WHITE
+            setTextColor(onCol)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8f).toFloat()
+                setColor(ColorUtils.setAlphaComponent(onCol, 40))
+                setStroke(dp(1f), ColorUtils.setAlphaComponent(onCol, 70))
+            }
+            setPadding(dp(10f), dp(5f), dp(10f), dp(5f))
+        }
+        previewContent.addView(sampleBadge)
+        previewCard.addView(previewContent)
+        root.addView(previewCard)
+
+        // Hex direct input row
+        val hexCard = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isBaselineAligned = false
+            setPadding(dp(14f), 0, dp(14f), 0)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12f).toFloat()
+                setColor(tokens.chipBg)
+                setStroke(dp(1f), tokens.cardBorder)
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48f)).apply {
+                bottomMargin = dp(12f)
+            }
+        }
+        val hexPrefix = TextView(activity).apply {
+            text = "HEX  #"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(tokens.textSecondary)
+            gravity = Gravity.CENTER_VERTICAL
+            includeFontPadding = true
+            setPadding(0, 0, dp(6f), 0)
+        }
+        hexCard.addView(hexPrefix)
+
+        var isUpdatingText = false
+        val hexEt = EditText(activity).apply {
+            val rawHex = String.format(Locale.ROOT, "%06X", 0xFFFFFF and currentColor)
+            setText(rawHex)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
+            setTextColor(tokens.textPrimary)
+            background = null
+            setPadding(0, 0, 0, 0)
+            gravity = Gravity.CENTER_VERTICAL
+            includeFontPadding = true
+            isSingleLine = true
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        }
+        hexCard.addView(hexEt)
+        root.addView(hexCard)
+
+        // Smooth Hyper Glide Sliders
+        lateinit var updatePreview: () -> Unit
+        lateinit var hueBar: HyperGlideSliderView
+        lateinit var satBar: HyperGlideSliderView
+        lateinit var valBar: HyperGlideSliderView
+
+        fun createSlider(label: String, maxVal: Int, curVal: Int, onProgress: (Int) -> Unit): Pair<LinearLayout, HyperGlideSliderView> {
+            val box = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(6f)
+                }
+            }
+            val hdr = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val labelTv = TextView(activity).apply {
+                text = label
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(tokens.textPrimary)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val valTv = TextView(activity).apply {
+                text = "$curVal"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(tokens.accent)
+            }
+            hdr.addView(labelTv)
+            hdr.addView(valTv)
+            box.addView(hdr)
+
+            val slider = HyperGlideSliderView(activity).apply {
+                min = 0
+                max = maxVal
+                value = curVal
+                accentColor = tokens.accent
+                isLightMode = tokens.isLight
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44f))
+                onValueChange = { p ->
+                    valTv.text = "$p"
+                    onProgress(p)
+                    updatePreview()
+                }
+            }
+            box.addView(slider)
+            return Pair(box, slider)
+        }
+
+        val (hueBox, hBar) = createSlider("Hue", 360, hsv[0].toInt().coerceIn(0, 360)) { p -> hsv[0] = p.toFloat() }
+        hueBar = hBar
+        root.addView(hueBox)
+
+        val (satBox, sBar) = createSlider("Saturation", 100, (hsv[1] * 100).toInt().coerceIn(0, 100)) { p -> hsv[1] = p / 100f }
+        satBar = sBar
+        root.addView(satBox)
+
+        val (valBox, vBar) = createSlider("Brightness", 100, (hsv[2] * 100).toInt().coerceIn(0, 100)) { p -> hsv[2] = p / 100f }
+        valBar = vBar
+        root.addView(valBox)
+
+        val contrastWarningTv = TextView(activity).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#EF4444"))
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            setPadding(0, dp(4f), 0, dp(6f))
+        }
+        root.addView(contrastWarningTv)
+
+        var applyBtn: TextView? = null
+
+        updatePreview = {
+            currentColor = Color.HSVToColor(hsv)
+            (previewCard.background as? GradientDrawable)?.setColor(currentColor)
+            val onCol = if (ColorUtils.calculateLuminance(currentColor) > 0.45) Color.parseColor("#0F172A") else Color.WHITE
+            previewHexTv.text = String.format(Locale.ROOT, "#%06X", 0xFFFFFF and currentColor)
+            previewHexTv.setTextColor(onCol)
+            sampleBadge.setTextColor(onCol)
+            (sampleBadge.background as? GradientDrawable)?.apply {
+                setColor(ColorUtils.setAlphaComponent(onCol, 40))
+                setStroke(dp(1f), ColorUtils.setAlphaComponent(onCol, 70))
+            }
+            applyBtn?.let { btn ->
+                (btn.background as? GradientDrawable)?.setColor(currentColor)
+                btn.setTextColor(onCol)
+            }
+            val lum = ColorUtils.calculateLuminance(currentColor)
+            val isRestricted = if (tokens.isLight) lum > 0.80 else lum < 0.12
+            if (isRestricted) {
+                contrastWarningTv.text = if (tokens.isLight) "⚠️ Accent is too light for Light Theme" else "⚠️ Accent is too dark for Dark Theme"
+                contrastWarningTv.visibility = View.VISIBLE
+                applyBtn?.isEnabled = false
+                applyBtn?.alpha = 0.45f
+            } else {
+                contrastWarningTv.visibility = View.GONE
+                applyBtn?.isEnabled = true
+                applyBtn?.alpha = 1.0f
+            }
+            if (!isUpdatingText) {
+                isUpdatingText = true
+                val raw = String.format(Locale.ROOT, "%06X", 0xFFFFFF and currentColor)
+                if (hexEt.text.toString().uppercase(Locale.ROOT) != raw) {
+                    hexEt.setText(raw)
+                    hexEt.setSelection(raw.length)
+                }
+                isUpdatingText = false
+            }
+        }
+
+        hexEt.addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) {
+                if (isUpdatingText) return
+                val text = s?.toString()?.trim()?.removePrefix("#") ?: return
+                if (text.length == 6) {
+                    try {
+                        val parsed = Color.parseColor("#$text")
+                        Color.colorToHSV(parsed, hsv)
+                        isUpdatingText = true
+                        hueBar.value = hsv[0].toInt().coerceIn(0, 360)
+                        satBar.value = (hsv[1] * 100).toInt().coerceIn(0, 100)
+                        valBar.value = (hsv[2] * 100).toInt().coerceIn(0, 100)
+                        isUpdatingText = false
+                        updatePreview()
+                    } catch (_: Exception) {}
+                }
+            }
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+        })
+
+        // Aesthetic Quick Presets Row
+        val quickPresets = listOf(
+            "#EF4444", "#F97316", "#F59E0B", "#10B981",
+            "#06B6D4", "#3B82F6", "#6366F1", "#8B5CF6",
+            "#EC4899", "#64748B"
+        )
+        val presetRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(4f)
+                bottomMargin = dp(16f)
+            }
+        }
+        val presetScroll = HorizontalScrollView(activity).apply {
+            isHorizontalScrollBarEnabled = false
+        }
+        for (hex in quickPresets) {
+            val c = Color.parseColor(hex)
+            val chip = FrameLayout(activity).apply {
+                val s = dp(28f)
+                layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(8f) }
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(7f).toFloat()
+                    setColor(c)
+                    setStroke(dp(1f), ColorUtils.setAlphaComponent(Color.WHITE, 40))
+                }
+                setOnClickListener {
+                    Color.colorToHSV(c, hsv)
+                    hueBar.value = hsv[0].toInt().coerceIn(0, 360)
+                    satBar.value = (hsv[1] * 100).toInt().coerceIn(0, 100)
+                    valBar.value = (hsv[2] * 100).toInt().coerceIn(0, 100)
+                    updatePreview()
+                }
+            }
+            presetRow.addView(chip)
+        }
+        presetScroll.addView(presetRow)
+        root.addView(presetScroll)
+
+        // Action Buttons Row
+        val btnRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44f))
+        }
+
+        val cancelBtn = TextView(activity).apply {
+            text = "Cancel"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(tokens.textSecondary)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12f).toFloat()
+                setColor(tokens.chipBg)
+                setStroke(dp(1f), tokens.cardBorder)
+            }
+            layoutParams = LinearLayout.LayoutParams(0, dp(44f), 1f).apply { marginEnd = dp(10f) }
+            setOnClickListener {
+                dialog.dismiss()
+            }
+        }
+        btnRow.addView(cancelBtn)
+
+        applyBtn = TextView(activity).apply {
+            text = "Apply Accent"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            setTypeface(null, Typeface.BOLD)
+            val onCol = if (ColorUtils.calculateLuminance(currentColor) > 0.45) Color.parseColor("#0F172A") else Color.WHITE
+            setTextColor(onCol)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12f).toFloat()
+                setColor(currentColor)
+            }
+            layoutParams = LinearLayout.LayoutParams(0, dp(44f), 1.25f)
+            setOnClickListener {
+                val lum = ColorUtils.calculateLuminance(currentColor)
+                val isRestricted = if (tokens.isLight) lum > 0.80 else lum < 0.12
+                if (isRestricted) {
+                    activity.showToast(if (tokens.isLight) "Cannot apply light accent on Light Theme" else "Cannot apply dark accent on Dark Theme")
+                    return@setOnClickListener
+                }
+                dialog.dismiss()
+                onColorApplied(currentColor)
+                activity.updateAccentColor(currentColor)
+                activity.showToast("Applied accent color")
+            }
+        }
+        btnRow.addView(applyBtn)
+        root.addView(btnRow)
+
+        dialog.setContentView(root)
+        dialog.window?.let { w ->
+            w.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            w.setLayout(dialogW, WindowManager.LayoutParams.WRAP_CONTENT)
+            w.setGravity(Gravity.CENTER)
+            val lp = w.attributes
+            lp.width = dialogW
+            w.attributes = lp
+        }
+        dialog.show()
     }
 
     fun buildPersonalizationScreen(
@@ -2094,7 +3408,7 @@ class ConceptScreens(
             ConceptComponents.createHeroBrandCard(
                 context = activity,
                 title = "Advanced Settings",
-                description = "Sound, haptic feedback pressure, voice typing, clipboard history, one-handed mode, and reset.",
+                description = "Sound, haptic feedback pressure, voice typing, clipboard history, and reset.",
                 iconRes = R.drawable.ic_settings,
                 tokens = tokens,
                 density = density
@@ -2117,7 +3431,7 @@ class ConceptScreens(
 
         card1.addView(ConceptComponents.createSliderRow(
             context = activity, title = "Audio Click Volume", subtitle = "Audible keypress volume level",
-            min = 1, max = 100, current = p.getInt(Skins.KEY_SOUND_VOLUME, 80),
+            min = 1, max = 100, current = Skins.prefInt(p, Skins.KEY_SOUND_VOLUME, 80),
             suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_volume_2, step = 1,
             defaultValue = 80
         ) { v ->
@@ -2126,11 +3440,7 @@ class ConceptScreens(
             activity.playSoundPreview(volume = v / 100f)
         })
 
-        val soundTones = listOf(
-            "default" to "Default Click",
-            "multi" to "Piano Chords",
-            "drum" to "Acoustic Drums"
-        )
+        val soundTones = KeySounds.TONES
         val curTone = p.getString(Skins.KEY_SOUND_TONE, "default") ?: "default"
         card1.addView(
             ConceptComponents.createChipsRow(
@@ -2145,7 +3455,8 @@ class ConceptScreens(
                 p.edit().putString(Skins.KEY_SOUND_TONE, t).apply()
                 activity.notifySettingsChanged(restart = false)
                 activity.playSoundPreview(tone = t)
-                activity.showToast("Sound: ${if (t == "multi") "Piano" else if (t == "drum") "Drum" else "Default"}")
+                val label = soundTones.firstOrNull { it.first == t }?.second ?: "Default"
+                activity.showToast("Sound: $label")
             }
         )
 
@@ -2157,14 +3468,14 @@ class ConceptScreens(
             activity.notifySettingsChanged(restart = false)
             if (v) {
                 try {
-                    gnosis.keyboard.Haptics.buzz(activity, p.getInt(Skins.KEY_HAPTIC_PRESSURE, 50))
+                    gnosis.keyboard.Haptics.buzz(activity, Skins.prefInt(p, Skins.KEY_HAPTIC_PRESSURE, 50))
                 } catch (_: Exception) {}
             }
         })
 
         card1.addView(ConceptComponents.createSliderRow(
             context = activity, title = "Vibration Strength", subtitle = "Tactile haptic motor vibration intensity",
-            min = 10, max = 100, current = p.getInt(Skins.KEY_HAPTIC_PRESSURE, 50),
+            min = 10, max = 100, current = Skins.prefInt(p, Skins.KEY_HAPTIC_PRESSURE, 50),
             suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_smartphone, step = 1,
             defaultValue = 50
         ) { v ->
@@ -2174,6 +3485,32 @@ class ConceptScreens(
                 gnosis.keyboard.Haptics.buzz(activity, v)
             } catch (_: Exception) {}
         })
+
+        val particleOptions = listOf(
+            "off" to "Off",
+            "sparks" to "Neon Sparks",
+            "hearts" to "Floating Hearts",
+            "bubbles" to "Bubble Burst",
+            "stars" to "Glitter Stars",
+            "trail" to "Neon Glow Trail"
+        )
+        val curParticle = p.getString(Skins.KEY_PARTICLE_EFFECTS, Skins.DEFAULT_PARTICLE_EFFECTS) ?: Skins.DEFAULT_PARTICLE_EFFECTS
+        card1.addView(
+            ConceptComponents.createChipsRow(
+                context = activity,
+                title = "Interactive Keypress Effects",
+                options = particleOptions,
+                selectedId = curParticle,
+                tokens = tokens,
+                density = density,
+                iconRes = R.drawable.ic_sparkles
+            ) { styleId ->
+                p.edit().putString(Skins.KEY_PARTICLE_EFFECTS, styleId).apply()
+                activity.notifySettingsChanged(restart = false)
+                val label = particleOptions.firstOrNull { it.first == styleId }?.second ?: "Off"
+                activity.showToast("Effects: $label")
+            }
+        )
         root.addView(card1)
 
         val card2 = ConceptComponents.createCard(activity, tokens, density)
@@ -2202,8 +3539,15 @@ class ConceptScreens(
                 density = density,
                 iconRes = R.drawable.ic_sliders
             ) { eng ->
+                if (eng == "google") {
+                    if (!isGoogleSpeechRecognitionInstalled(activity)) {
+                        activity.showToast("Google Speech Recognition is not installed. Redirecting to Play Store...")
+                        openGoogleSpeechPlayStore(activity)
+                        return@createChipsRow
+                    }
+                }
                 p.edit().putString("setting_speech_engine", eng).apply()
-                activity.showToast("Voice engine: $eng")
+                activity.showToast("Voice engine: ${if (eng == "google") "Google Speech Recognition" else "Android Default Recognizer"}")
             }
         )
 
@@ -2217,83 +3561,8 @@ class ConceptScreens(
         )
         root.addView(card2)
 
-        val card3 = ConceptComponents.createCard(activity, tokens, density)
-        card3.addView(ConceptComponents.createCardHeader(activity, "CLIPBOARD HISTORY", tokens, density, R.drawable.ic_sliders))
-
-        card3.addView(ConceptComponents.createSwitchRow(
-            activity, "Clipboard History Capture", "Save copied snippets and URLs in on-device history",
-            p.getBoolean("clipboard_history_enabled", true), tokens, density, R.drawable.ic_sliders
-        ) { v ->
-            p.edit().putBoolean("clipboard_history_enabled", v).apply()
-            ClipboardHistory.setEnabled(activity, ClipboardHistory.CAT_TEXT, v)
-        })
-
-        card3.addView(ConceptComponents.createSwitchRow(
-            activity, "Auto-Capture Screenshots", "Automatically show recent screenshots in clipboard strip",
-            p.getBoolean("clipboard_screenshots_enabled", false), tokens, density, R.drawable.ic_eye
-        ) { v ->
-            p.edit().putBoolean("clipboard_screenshots_enabled", v).apply()
-            if (v) {
-                activity.screenshotPermission.launch(
-                    if (android.os.Build.VERSION.SDK_INT >= 33) android.Manifest.permission.READ_MEDIA_IMAGES
-                    else android.Manifest.permission.READ_EXTERNAL_STORAGE
-                )
-            } else {
-                ClipboardHistory.setEnabled(activity, ClipboardHistory.CAT_SCREENSHOT, false)
-            }
-        })
-
-        val clearClipBox = LinearLayout(activity).apply {
-            setPadding(dp(14f), dp(4f), dp(14f), dp(12f))
-        }
-        val clearClipBtn = ConceptComponents.createPillButton(activity, "Clear Clipboard History", tokens, density, false) {
-            activity.showConfirmDialog(
-                title = "Clear Clipboard History?",
-                msg = "This will delete all copied snippets, clips, and screenshot previews.",
-                confirmLabel = "Clear Clips",
-                destructive = true
-            ) {
-                ClipboardHistory.clear(activity)
-                activity.showToast("Clipboard history cleared")
-            }
-        }
-        clearClipBox.addView(clearClipBtn)
-        card3.addView(clearClipBox)
-        root.addView(card3)
-
         val card4 = ConceptComponents.createCard(activity, tokens, density)
-        card4.addView(ConceptComponents.createCardHeader(activity, "WINDOW & LAYOUT MODES", tokens, density, R.drawable.ic_sliders))
-
-        val oneHandedModes = listOf(
-            "off" to "Off (Centered)",
-            "left" to "Left-Handed",
-            "right" to "Right-Handed"
-        )
-        val curOneHanded = p.getString(Skins.KEY_ONE_HANDED, "off") ?: "off"
-        card4.addView(
-            ConceptComponents.createChipsRow(
-                context = activity,
-                title = "One-Handed Keyboard Mode",
-                options = oneHandedModes,
-                selectedId = curOneHanded,
-                tokens = tokens,
-                density = density,
-                iconRes = R.drawable.ic_smartphone
-            ) { m ->
-                p.edit().putString(Skins.KEY_ONE_HANDED, m).apply()
-                activity.notifySettingsChanged(restart = true)
-                activity.showToast("One-handed mode: $m")
-            }
-        )
-
-        card4.addView(ConceptComponents.createSwitchRow(
-            activity, "Floating Keyboard", "Detached moveable mini-keyboard window",
-            p.getBoolean(Skins.KEY_FLOATING, false), tokens, density, R.drawable.ic_sliders
-        ) { v ->
-            p.edit().putBoolean(Skins.KEY_FLOATING, v).apply()
-            activity.notifySettingsChanged(restart = true)
-        })
-
+        card4.addView(ConceptComponents.createCardHeader(activity, "APP ICON & DRAWER", tokens, density, R.drawable.ic_eye))
         card4.addView(ConceptComponents.createSwitchRow(
             activity, "Hide App Launcher Icon", "Hide Gnosis Keyboard icon from app drawer (open from settings)",
             p.getBoolean(Skins.KEY_HIDE_LAUNCHER_ICON, false), tokens, density, R.drawable.ic_eye
@@ -2366,7 +3635,7 @@ class ConceptScreens(
             }
         }
         val pTitle = TextView(activity).apply {
-            text = "100% On-Device Privacy Shield"
+            text = "On-Device Engine & Security"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             setTypeface(null, Typeface.BOLD)
             setTextColor(tokens.textPrimary)
@@ -2434,43 +3703,17 @@ class ConceptScreens(
         )
 
         val p = Skins.prefs(activity)
-        val curThemeMode = p.getString(Skins.KEY_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
-        val curTheme = p.getString(Skins.KEY_THEME, "lucid-void") ?: "lucid-void"
-
-        val modeCard = ConceptComponents.createCard(activity, tokens, density)
-        modeCard.addView(ConceptComponents.createCardHeader(activity, "THEME MODE FILTER", tokens, density, R.drawable.ic_sun))
-
-        val modeOptions = listOf("Auto (System)", "Dark Mode", "Light Mode")
-        val modeIdx = when (curThemeMode) {
-            Skins.MODE_DARK -> 1
-            Skins.MODE_LIGHT -> 2
-            else -> 0
+        val curAppMode = p.getString(Skins.KEY_APP_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
+        val curKbMode = if (p.contains(Skins.KEY_KEYBOARD_THEME_MODE)) {
+            p.getString(Skins.KEY_KEYBOARD_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
+        } else {
+            p.getString(Skins.KEY_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
         }
-        modeCard.addView(
-            ConceptComponents.createSegmentSelector(
-                context = activity,
-                options = modeOptions,
-                selectedIndex = modeIdx,
-                tokens = tokens,
-                density = density
-            ) { idx ->
-                val targetMode = when (idx) {
-                    1 -> Skins.MODE_DARK
-                    2 -> Skins.MODE_LIGHT
-                    else -> Skins.MODE_AUTO
-                }
-                p.edit().putString(Skins.KEY_THEME_MODE, targetMode).apply()
-                p.edit().putString("settings_theme_mode", targetMode).apply()
-                activity.notifySettingsChanged(restart = true)
-                activity.reloadTheme()
-                onThemeChanged()
-                activity.refreshCurrentScreen()
-            }
-        )
-        root.addView(modeCard)
+        val curThemeMode = curKbMode
+        val curTheme = p.getString(Skins.KEY_THEME, Skins.THEME_MD3_DYNAMIC) ?: Skins.THEME_MD3_DYNAMIC
 
         data class GalleryThemeItem(val id: String, val name: String, val desc: String)
-        val themes = when (curThemeMode) {
+        val themes = when (curKbMode) {
             Skins.MODE_LIGHT -> listOf(
                 GalleryThemeItem("lucid-void_light", "Lucid Void Light", "Flagship frosted daylight acrylic & soft glow"),
                 GalleryThemeItem("md3_dynamic_light", "Material You Light", "Material You dynamic daylight surface elevation"),
@@ -2487,7 +3730,7 @@ class ConceptScreens(
                 GalleryThemeItem("contrast_light", "High Contrast Light", "Maximized contrast for daylight accessibility")
             )
             Skins.MODE_DARK -> listOf(
-                GalleryThemeItem("lucid-void", "Lucid Void", "Flagship frosted obsidian glassmorphism & deep glow"),
+                GalleryThemeItem("lucid-void", "Lucid Void", "Flagship sleek dark glassmorphism & smoked obsidian clarity"),
                 GalleryThemeItem("md3_dynamic", "Material You", "Tonal surface elevation and adaptive hues"),
                 GalleryThemeItem("onyx", "Onyx Black", "Pure AMOLED black for OLED battery efficiency"),
                 GalleryThemeItem("graphite", "Graphite Slate", "Modern minimalist slate charcoal tones"),
@@ -2502,7 +3745,7 @@ class ConceptScreens(
                 GalleryThemeItem("contrast", "High Contrast", "Maximized contrast for high visibility")
             )
             else -> listOf(
-                GalleryThemeItem("lucid-void", "Lucid Void (Auto)", "Adaptive frosted glassmorphism that transitions with system theme"),
+                GalleryThemeItem("lucid-void", "Lucid Void (Auto)", "Adaptive sleek glassmorphism that transitions with system theme"),
                 GalleryThemeItem("md3_dynamic", "Material You (Auto)", "Tonal Material You surfaces dynamically matching dark/light mode"),
                 GalleryThemeItem("onyx", "Onyx / Daylight (Auto)", "Onyx pure AMOLED in dark mode, Daylight in light mode"),
                 GalleryThemeItem("graphite", "Graphite (Auto)", "Graphite slate charcoal in dark mode, clean slate in light mode"),
@@ -2832,7 +4075,11 @@ class ConceptScreens(
         card1.addView(ConceptComponents.createCardHeader(activity, "FAST THEME SELECTOR", tokens, density, R.drawable.ic_palette))
 
         val modeOptions = listOf("Auto", "Dark", "Light")
-        val currentMode = p.getString(Skins.KEY_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
+        val currentMode = if (p.contains(Skins.KEY_KEYBOARD_THEME_MODE)) {
+            p.getString(Skins.KEY_KEYBOARD_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
+        } else {
+            p.getString(Skins.KEY_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
+        }
         val modeIdx = when (currentMode) {
             Skins.MODE_DARK -> 1
             Skins.MODE_LIGHT -> 2
@@ -2851,10 +4098,9 @@ class ConceptScreens(
                     2 -> Skins.MODE_LIGHT
                     else -> Skins.MODE_AUTO
                 }
+                p.edit().putString(Skins.KEY_KEYBOARD_THEME_MODE, target).apply()
                 p.edit().putString(Skins.KEY_THEME_MODE, target).apply()
-                p.edit().putString("settings_theme_mode", target).apply()
                 activity.notifySettingsChanged(restart = true)
-                activity.reloadTheme()
                 onThemeChanged()
             }
         )
@@ -3191,7 +4437,7 @@ class ConceptScreens(
             container.addView(
                 ConceptComponents.createCallout(
                     activity,
-                    "Better suggestions, with every word. Keystrokes are measured 100% offline.",
+                    "Better suggestions, with every word. Typing insights are computed on-device.",
                     R.drawable.ic_shield,
                     tokens,
                     density
@@ -3235,6 +4481,7 @@ class ConceptScreens(
         val searchBox = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            isBaselineAligned = false
             setPadding(dp(12f), dp(4f), dp(12f), dp(4f))
             background = GradientDrawable().apply {
                 cornerRadius = dp(14f).toFloat()
@@ -3261,6 +4508,8 @@ class ConceptScreens(
             setTextColor(tokens.textPrimary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             background = null
+            gravity = Gravity.CENTER_VERTICAL
+            includeFontPadding = true
             maxLines = 1
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
@@ -3280,31 +4529,25 @@ class ConceptScreens(
 
         data class SettingItem(val name: String, val category: String, val keywords: String, val action: () -> Unit)
         val catalog = listOf(
-            SettingItem("Auto-correction", "Typing & Suggestions", "autocorrect typo spell fix punctuation", { navigateTo(buildTypingScreen(), "Typing & Suggestions") }),
-            SettingItem("Next-Word Prediction", "Typing & Suggestions", "predict next word suggestion ai n-gram", { navigateTo(buildTypingScreen(), "Typing & Suggestions") }),
-            SettingItem("Continuous Glide Typing", "Typing & Suggestions", "gesture swipe glide trace sliding", { navigateTo(buildTypingScreen(), "Typing & Suggestions") }),
-            SettingItem("Gesture Delete", "Typing & Suggestions", "swipe backspace delete word swipe left", { navigateTo(buildTypingScreen(), "Typing & Suggestions") }),
-            SettingItem("Spacebar Cursor Control", "Typing & Suggestions", "space trackpad cursor slide move navigation", { navigateTo(buildTypingScreen(), "Typing & Suggestions") }),
-            SettingItem("Emoji Suggestion Strip", "Typing & Suggestions", "emoji emoticons reactions symbols stickers", { navigateTo(buildTypingScreen(), "Typing & Suggestions") }),
-            SettingItem("Double Space to Period", "Typing & Suggestions", "period dot punctuation shortcut tap", { navigateTo(buildTypingScreen(), "Typing & Suggestions") }),
-            SettingItem("Auto-Capitalization", "Typing & Suggestions", "caps uppercase capital sentences words", { navigateTo(buildTypingScreen(), "Typing & Suggestions") }),
+            SettingItem("Spacebar Cursor Control", "Typing & Mechanics", "space trackpad cursor slide move navigation", { navigateTo(buildTypingScreen(), "Typing & Mechanics") }),
+            SettingItem("Secondary Hints & Symbols", "Typing & Mechanics", "secondary hints symbols numbers on keys", { navigateTo(buildTypingScreen(), "Typing & Mechanics") }),
+            SettingItem("Long Press Delay", "Typing & Mechanics", "long press duration delay milliseconds", { navigateTo(buildTypingScreen(), "Typing & Mechanics") }),
+            SettingItem("Key Magnifying Popup", "Typing & Mechanics", "key popup bubble magnifier touch preview", { navigateTo(buildTypingScreen(), "Typing & Mechanics") }),
+            SettingItem("Auto-Capitalization", "Typing & Mechanics", "caps uppercase capital sentences words", { navigateTo(buildTypingScreen(), "Typing & Mechanics") }),
             SettingItem("Preset Theme Gallery", "Appearance", "theme amoled dark light color palette", { navigateTo(buildThemeGridScreen(), "Theme Gallery") }),
             SettingItem("Design Studio & Geometry", "Appearance", "radius corners padding gap borders height scale", { navigateTo(buildAppearanceScreen { navigateTo(buildThemeGridScreen(), "Theme Gallery") }, "Appearance") }),
-            SettingItem("Custom Fonts Typography", "Appearance", "fonts store typeface roboto inter jetbrains mono custom", { activity.showFontStoreDialog() }),
-            SettingItem("Lucid Void Glassmorphism", "Appearance", "glass frosted blur transparent background effect", { navigateTo(buildAppearanceScreen { navigateTo(buildThemeGridScreen(), "Theme Gallery") }, "Appearance") }),
+            SettingItem("Custom Fonts & Typography Store", "Appearance", "fonts store typeface roboto inter jetbrains mono custom", { navigateTo(buildFontStoreScreen(), "Typography & Fonts Store") }),
+            SettingItem("Lucid Void Dark Glass", "Appearance", "dark sleek dark glass transparent obsidian smoked glass effect", { navigateTo(buildAppearanceScreen { navigateTo(buildThemeGridScreen(), "Theme Gallery") }, "Appearance") }),
             SettingItem("Custom Photo Background", "Appearance", "wallpaper picture gallery photo crop background", { activity.showCropDialog() }),
-            SettingItem("Layout Style & Downloader", "Language & Dictionary", "qwerty dvorak colemak azerty layout download", { activity.showLayoutDownloaderDialog() }),
-            SettingItem("Additional Dictionaries Store", "Language & Dictionary", "dictionary autocorrect wordlist hinglish english spanish german hindi", { activity.showDictionaryStoreDialog() }),
-                        SettingItem("Quick Access Toolbar Keys", "Language & Dictionary", "toolbar top bar 3 keys shortcuts customizer", { navigateTo(buildLanguageScreen { navigateTo(buildLearnedDataScreen(), "Learned Data") }, "Language & Dictionary") }),
+            SettingItem("Layout Gallery & Downloader", "Language & Dictionary", "qwerty dvorak colemak azerty layout download", { navigateTo(buildLayoutGalleryScreen(), "Layout Gallery") }),
+            SettingItem("Quick Access Toolbar Keys", "Language & Dictionary", "toolbar top bar 3 keys shortcuts customizer", { navigateTo(buildLanguageScreen { navigateTo(buildLearnedDataScreen(), "Learned Data") }, "Language & Dictionary") }),
             SettingItem("Text Expansion Shortcuts", "Personalization", "snippets shortcuts text expansion omw brb", { navigateTo(buildShortcutsScreen(), "Text Shortcuts") }),
             SettingItem("Favorite Vocabulary Words", "Personalization", "words custom personal vocabulary custom words", { navigateTo(buildFavoriteWordsScreen(), "Favorite Words") }),
             SettingItem("Manage Learned Dictionary", "Personalization", "learned data export import backup wipe trie", { navigateTo(buildLearnedDataScreen(), "Learned Data") }),
             SettingItem("Haptic Feedback Pressure", "Advanced Settings", "vibrate vibration haptics pressure millisecond", { navigateTo(buildAdvancedScreen(), "Advanced Settings") }),
             SettingItem("Keypress Audio & Click Tone", "Advanced Settings", "audio sound volume click mechanical typewriter", { navigateTo(buildAdvancedScreen(), "Advanced Settings") }),
             SettingItem("Clipboard History & Screenshots", "Advanced Settings", "clipboard copy paste pin screenshots capture", { navigateTo(buildAdvancedScreen(), "Advanced Settings") }),
-            SettingItem("One-Handed Keyboard Mode", "Advanced Settings", "one handed left right single hand compact", { navigateTo(buildAdvancedScreen(), "Advanced Settings") }),
-            SettingItem("Floating Keyboard Mode", "Advanced Settings", "floating movable window freeform keyboard", { navigateTo(buildAdvancedScreen(), "Advanced Settings") }),
-            SettingItem("Offline Privacy Shield", "About & Privacy", "offline security telemetry private local storage", { navigateTo(buildAboutPrivacyScreen(), "About & Privacy") }),
+            SettingItem("Device Privacy & Security", "About & Privacy", "offline security private local storage", { navigateTo(buildAboutPrivacyScreen(), "About & Privacy") }),
             SettingItem("Restart Keyboard Engine", "Advanced Settings", "restart reload service reset crash fix", { activity.restartKeyboardEngine() }),
             SettingItem("Reset All Settings to Defaults", "Advanced Settings", "reset factory restore clear preferences", { activity.resetToDefault() })
         )
@@ -3404,7 +4647,7 @@ class ConceptScreens(
         root.addView(
             ConceptComponents.createCallout(
                 activity,
-                "100% Offline & Private: Zero network permission, zero internet access, zero telemetry. All learned typing patterns remain strictly isolated on your device.",
+                "Local Processing & Security: All learned typing patterns and custom dictionaries are processed directly on your device.",
                 R.drawable.ic_shield,
                 tokens,
                 density
@@ -4140,6 +5383,927 @@ class ConceptScreens(
             .setMessage("Gnosis Keyboard incorporates open-source software under the Apache 2.0, MIT, and BSD licenses:\n\n- AndroidX Libraries (Apache 2.0)\n- Kotlin Standard Library (Apache 2.0)\n- Lucide Icons (ISC License)\n- CMU Pronouncing Dictionary (BSD-style)")
             .setPositiveButton("Close", null)
             .show()
+    }
+
+    fun buildLayoutGalleryScreen(): View {
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(16f), dp(12f), dp(16f), dp(80f))
+        }
+
+        root.addView(
+            ConceptComponents.createHeroBrandCard(
+                context = activity,
+                title = "Keyboard Layout Gallery",
+                description = "Browse ergonomic and regional physical keyboard arrangements. Download, preview, and apply layouts in real time.",
+                iconRes = R.drawable.ic_keyboard,
+                tokens = tokens,
+                density = density
+            )
+        )
+
+        val searchCard = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isBaselineAligned = false
+            setPadding(dp(14f), 0, dp(14f), 0)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(22f).toFloat()
+                setColor(tokens.chipBg)
+                setStroke(dp(1f), tokens.cardBorder)
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44f)).apply {
+                bottomMargin = dp(16f)
+            }
+        }
+        val searchIcon = ImageView(activity).apply {
+            setImageDrawable(ContextCompat.getDrawable(activity, R.drawable.ic_search)?.mutate()?.apply {
+                setTint(tokens.textSecondary)
+            })
+            val s = dp(18f)
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(10f) }
+        }
+        searchCard.addView(searchIcon)
+
+        val searchInput = EditText(activity).apply {
+            hint = "Search layout (e.g. Dvorak, Colemak, AZERTY)..."
+            setHintTextColor(tokens.textSecondary)
+            setTextColor(tokens.textPrimary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            background = null
+            setPadding(0, 0, 0, 0)
+            gravity = Gravity.CENTER_VERTICAL
+            includeFontPadding = true
+            inputType = InputType.TYPE_CLASS_TEXT
+            isSingleLine = true
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        }
+        searchCard.addView(searchInput)
+        root.addView(searchCard)
+
+        val listContainer = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        root.addView(listContainer)
+
+        var filterQuery = ""
+
+        fun render() {
+            listContainer.removeAllViews()
+            val p = Skins.prefs(activity)
+            val curLayoutId = p.getString(Skins.KEY_LAYOUT, "qwerty") ?: "qwerty"
+            val installedLayouts = LayoutExtensionManager.getInstalledLayouts(activity)
+            val installedIds = installedLayouts.map { it.id.lowercase(Locale.ROOT) }.toSet()
+
+            // Section 1: Installed Layouts
+            fun renderMiniKeyboardPreview(rows: List<String>, isCurrent: Boolean): View {
+                val previewBox = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    setPadding(dp(8f), dp(8f), dp(8f), dp(8f))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(10f).toFloat()
+                        setColor(tokens.chipBg)
+                        setStroke(dp(1f), if (isCurrent) tokens.accent else tokens.cardBorder)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = dp(8f)
+                    }
+                }
+                for (rowStr in rows.take(3)) {
+                    val rowLayout = LinearLayout(activity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            bottomMargin = dp(3f)
+                        }
+                    }
+                    val chars: List<String> = if (rowStr.contains(" ")) rowStr.split(" ") else rowStr.map { it.toString() }
+                    for (ch in chars.take(10)) {
+                        val keycap = TextView(activity).apply {
+                            text = ch.uppercase(Locale.ROOT)
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+                            setTypeface(null, Typeface.BOLD)
+                            setTextColor(if (isCurrent) tokens.accent else tokens.textPrimary)
+                            gravity = Gravity.CENTER
+                            background = GradientDrawable().apply {
+                                cornerRadius = dp(4f).toFloat()
+                                setColor(tokens.surface)
+                                setStroke(dp(0.8f), if (isCurrent) ColorUtils.setAlphaComponent(tokens.accent, 90) else tokens.cardBorder)
+                            }
+                            layoutParams = LinearLayout.LayoutParams(0, dp(22f), 1f).apply {
+                                marginStart = dp(1f)
+                                marginEnd = dp(1f)
+                            }
+                        }
+                        rowLayout.addView(keycap)
+                    }
+                    previewBox.addView(rowLayout)
+                }
+                return previewBox
+            }
+
+            fun getCatalogLayoutRows(id: String): List<String> = when (id.lowercase(Locale.ROOT)) {
+                "qwertz" -> listOf("qwertzuiop", "asdfghjkl", "yxcvbnm")
+                "azerty" -> listOf("azertyuiop", "qsdfghjklm", "wxcvbn")
+                "spanish" -> listOf("qwertyuiop", "asdfghjklñ", "zxcvbnm")
+                "deva" -> listOf("कखगघङचछजझञ", "टठडढणतथदधन", "पफबभमयरलवश")
+                "russian" -> listOf("йцукенгшщзх", "фывапролджэ", "ячсмитьбю")
+                "arabic" -> listOf("ضصثقفغعهخح", "شسیبلاتنمك", "ئءؤرلاىةوز")
+                "bengali" -> listOf("কখগঘঙচছজঝঞ", "টঠডঢণতথদধন", "পফবভমযরলবশ")
+                "tamil" -> listOf("கஙசஞடணதநபம", "யரலவழளறனஸஷ", "ஹஜஅஆஇஈஉஊஎஏ")
+                "telugu" -> listOf("కఖగఘఙచఛజఝఞ", "టఠడఢణతథదధన", "పఫబభమయరలవశ")
+                "portuguese" -> listOf("qwertyuiop", "asdfghjklç", "zxcvbnm")
+                "turkish" -> listOf("qwertyuıop", "asdfghjklş", "zxcvbnmöç")
+                "dvorak" -> listOf("pyfgcrl", "aoeuidhtns", "qjkxbmwvz")
+                "colemak" -> listOf("qwfpgjluy", "arstdhneio", "zxcvbkm")
+                else -> listOf("qwertyuiop", "asdfghjkl", "zxcvbnm")
+            }
+
+            val headerInstalled = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(4f), dp(4f), dp(4f), dp(8f))
+            }
+            headerInstalled.addView(ImageView(activity).apply {
+                setImageDrawable(ContextCompat.getDrawable(context, R.drawable.ic_check)?.mutate()?.apply { setTint(tokens.accent) })
+                val s = dp(16f)
+                layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(6f) }
+            })
+            headerInstalled.addView(TextView(activity).apply {
+                text = "INSTALLED LAYOUTS (${installedLayouts.size})"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(tokens.accent)
+            })
+            listContainer.addView(headerInstalled)
+
+            for (model in installedLayouts) {
+                if (filterQuery.isNotEmpty() && !model.name.contains(filterQuery, ignoreCase = true) && !model.id.contains(filterQuery, ignoreCase = true)) {
+                    continue
+                }
+                val isCurrent = model.id.equals(curLayoutId, ignoreCase = true)
+                val card = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(16f).toFloat()
+                        setColor(tokens.surface)
+                        setStroke(dp(1f), if (isCurrent) tokens.accent else tokens.cardBorder)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = dp(10f)
+                    }
+                }
+
+                val row = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+
+                val infoCol = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8f) }
+                }
+
+                val titleRow = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                titleRow.addView(TextView(activity).apply {
+                    text = model.name
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(tokens.textPrimary)
+                })
+
+                if (isCurrent) {
+                    titleRow.addView(TextView(activity).apply {
+                        text = " ACTIVE / BEING USED "
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(Color.parseColor("#10B981"))
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(6f).toFloat()
+                            setColor(ColorUtils.setAlphaComponent(Color.parseColor("#10B981"), 35))
+                        }
+                        setPadding(dp(6f), dp(2f), dp(6f), dp(2f))
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            marginStart = dp(8f)
+                        }
+                    })
+                }
+                infoCol.addView(titleRow)
+
+                val previewKeys = LayoutExtensionManager.getPreviewKeys(model.id).joinToString(" ")
+                infoCol.addView(TextView(activity).apply {
+                    text = "Top Row: $previewKeys • ${model.language}"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                    setTextColor(tokens.textSecondary)
+                    setPadding(0, dp(3f), 0, 0)
+                })
+                row.addView(infoCol)
+
+                if (!isCurrent) {
+                    val activateBtn = TextView(activity).apply {
+                        text = "Activate"
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(tokens.onAccentText)
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(12f).toFloat()
+                            setColor(tokens.accent)
+                        }
+                        setPadding(dp(14f), dp(7f), dp(14f), dp(7f))
+                        setOnClickListener {
+                            p.edit().putString(Skins.KEY_LAYOUT, model.id).apply()
+                            activity.notifySettingsChanged(restart = true)
+                            activity.showToast("Applied ${model.name} layout")
+                            render()
+                        }
+                    }
+                    row.addView(activateBtn)
+                }
+
+                if (model.id != "qwerty") {
+                    val delBtn = FrameLayout(activity).apply {
+                        val s = dp(34f)
+                        layoutParams = LinearLayout.LayoutParams(s, s).apply { marginStart = dp(8f) }
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(8f).toFloat()
+                            setColor(ColorUtils.setAlphaComponent(Color.RED, if (tokens.isLight) 25 else 40))
+                        }
+                        val iv = ImageView(activity).apply {
+                            val d = ContextCompat.getDrawable(context, R.drawable.ic_trash_2)?.mutate()
+                                ?: ContextCompat.getDrawable(context, R.drawable.ic_delete)?.mutate()
+                            d?.setTint(Color.parseColor("#FF5252"))
+                            setImageDrawable(d)
+                            val pad = dp(8f)
+                            setPadding(pad, pad, pad, pad)
+                            scaleType = ImageView.ScaleType.CENTER_INSIDE
+                        }
+                        addView(iv)
+                        setOnClickListener {
+                            LayoutExtensionManager.deleteLayout(activity, model.id)
+                            activity.showToast("Deleted ${model.name} layout")
+                            activity.notifySettingsChanged(restart = true)
+                            render()
+                        }
+                    }
+                    row.addView(delBtn)
+                }
+                card.addView(row)
+                card.addView(renderMiniKeyboardPreview(model.rows, isCurrent))
+                listContainer.addView(card)
+            }
+
+            // Section 2: Available Online Layouts
+            val available = LayoutExtensionManager.STATIC_CATALOG.filter { !installedIds.contains(it.id.lowercase(Locale.ROOT)) }
+            val headerAvailable = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(4f), dp(14f), dp(4f), dp(8f))
+            }
+            headerAvailable.addView(ImageView(activity).apply {
+                setImageDrawable(ContextCompat.getDrawable(context, R.drawable.ic_download)?.mutate()?.apply { setTint(tokens.accent) })
+                val s = dp(16f)
+                layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(6f) }
+            })
+            headerAvailable.addView(TextView(activity).apply {
+                text = "AVAILABLE ONLINE LAYOUTS (${available.size})"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(tokens.accent)
+            })
+            listContainer.addView(headerAvailable)
+
+            for (item in available) {
+                if (filterQuery.isNotEmpty() && !item.name.contains(filterQuery, ignoreCase = true) && !item.id.contains(filterQuery, ignoreCase = true) && !item.description.contains(filterQuery, ignoreCase = true)) {
+                    continue
+                }
+                val itemCard = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(16f).toFloat()
+                        setColor(tokens.surface)
+                        setStroke(dp(1f), tokens.cardBorder)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = dp(10f)
+                    }
+                }
+
+                val row = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+
+                val col = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8f) }
+                }
+                col.addView(TextView(activity).apply {
+                    text = item.name
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(tokens.textPrimary)
+                })
+                col.addView(TextView(activity).apply {
+                    text = item.description
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                    setTextColor(tokens.textSecondary)
+                    setPadding(0, dp(3f), 0, 0)
+                })
+                row.addView(col)
+
+                val progressBar = ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    isIndeterminate = false
+                    max = 100
+                    progress = 0
+                    visibility = View.GONE
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4f)).apply {
+                        topMargin = dp(8f)
+                    }
+                }
+
+                val dlBtn = TextView(activity).apply {
+                    text = "Download"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(tokens.onAccentText)
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(12f).toFloat()
+                        setColor(tokens.accent)
+                    }
+                    setPadding(dp(14f), dp(7f), dp(14f), dp(7f))
+                    setOnClickListener {
+                        isEnabled = false
+                        progressBar.isIndeterminate = true
+                        progressBar.visibility = View.VISIBLE
+                        LayoutExtensionManager.downloadAndInstall(activity, item) { success, _ ->
+                            activity.runOnUiThread {
+                                if (success) {
+                                    activity.showToast("Installed ${item.name} layout")
+                                    activity.notifySettingsChanged(restart = true)
+                                    render()
+                                } else {
+                                    isEnabled = true
+                                    progressBar.visibility = View.GONE
+                                    activity.showToast("Download failed")
+                                }
+                            }
+                        }
+                    }
+                }
+                row.addView(dlBtn)
+                itemCard.addView(row)
+                itemCard.addView(renderMiniKeyboardPreview(getCatalogLayoutRows(item.id), false))
+                itemCard.addView(progressBar)
+                listContainer.addView(itemCard)
+            }
+        }
+
+        searchInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+                filterQuery = s?.toString()?.trim() ?: ""
+                render()
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
+        render()
+        return root
+    }
+
+    fun buildFontStoreScreen(): View {
+        val root = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(16f), dp(12f), dp(16f), dp(80f))
+        }
+
+        root.addView(
+            ConceptComponents.createHeroBrandCard(
+                context = activity,
+                title = "Typography & Font Store",
+                description = "Download and apply custom typefaces for key labels. Switch system font or customize font scale & weight in real time.",
+                iconRes = R.drawable.ic_type,
+                tokens = tokens,
+                density = density
+            )
+        )
+
+        val p = Skins.prefs(activity)
+
+        val typographyCard = ConceptComponents.createCard(activity, tokens, density)
+        typographyCard.addView(ConceptComponents.createCardHeader(activity, "TYPOGRAPHY CONTROLS", tokens, density, R.drawable.ic_type))
+
+        typographyCard.addView(ConceptComponents.createSwitchRow(
+            activity, "Use System Font", "Follow default Android device typography",
+            p.getBoolean(Skins.KEY_USE_SYSTEM_FONT, Skins.DEFAULT_USE_SYSTEM_FONT), tokens, density, R.drawable.ic_type
+        ) { v ->
+            p.edit().putBoolean(Skins.KEY_USE_SYSTEM_FONT, v).apply()
+            activity.notifySettingsChanged(restart = true)
+        })
+
+        typographyCard.addView(ConceptComponents.createSwitchRow(
+            activity, "Bold Key Labels", "Render key letters with heavy bold typeface weight",
+            p.getBoolean(Skins.KEY_STUDIO_FONT_BOLD, false), tokens, density, R.drawable.ic_type
+        ) { v ->
+            p.edit().putBoolean(Skins.KEY_STUDIO_FONT_BOLD, v).apply()
+            activity.notifySettingsChanged(restart = true)
+        })
+
+        typographyCard.addView(ConceptComponents.createFloatSliderRow(
+            context = activity, title = "Key Font Scale", subtitle = "Proportional letter character size",
+            min = 0.80f, max = 1.30f, current = Skins.prefFloat(p, Skins.KEY_STUDIO_FONT_SCALE, 0.80f),
+            suffix = "%", tokens = tokens, density = density, iconRes = R.drawable.ic_sliders, step = 0.01f,
+            defaultValue = 0.80f
+        ) { v ->
+            p.edit().putFloat(Skins.KEY_STUDIO_FONT_SCALE, v).apply()
+            activity.notifySettingsChanged(restart = true)
+        })
+        root.addView(typographyCard)
+
+        // Refined Search Box
+        val searchCard = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isBaselineAligned = false
+            setPadding(dp(14f), 0, dp(14f), 0)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12f).toFloat()
+                setColor(tokens.chipBg)
+                setStroke(dp(1f), tokens.cardBorder)
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48f)).apply {
+                topMargin = dp(6f)
+                bottomMargin = dp(16f)
+            }
+        }
+        val searchIcon = ImageView(activity).apply {
+            setImageDrawable(ContextCompat.getDrawable(activity, R.drawable.ic_search)?.mutate()?.apply {
+                setTint(tokens.textSecondary)
+            })
+            val s = dp(18f)
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(10f) }
+        }
+        searchCard.addView(searchIcon)
+
+        val searchInput = EditText(activity).apply {
+            hint = "Search typefaces (e.g. Roboto, Inter, Fira)..."
+            setHintTextColor(tokens.textSecondary)
+            setTextColor(tokens.textPrimary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            background = null
+            setPadding(0, 0, 0, 0)
+            gravity = Gravity.CENTER_VERTICAL
+            includeFontPadding = true
+            inputType = InputType.TYPE_CLASS_TEXT
+            isSingleLine = true
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        }
+        searchCard.addView(searchInput)
+        root.addView(searchCard)
+
+        val listContainer = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        root.addView(listContainer)
+
+        var filterQuery = ""
+        var remoteFonts: List<RemoteFontInfo> = emptyList()
+
+        fun render() {
+            listContainer.removeAllViews()
+            val curFont = p.getString(Skins.KEY_STUDIO_FONT, Skins.FONT_DEFAULT) ?: Skins.FONT_DEFAULT
+            val installedFonts = FontExtensionManager.getInstalledFonts(activity)
+            val installedFilenames = installedFonts.map { it.filename.lowercase(Locale.ROOT) }.toSet()
+
+            fun renderFontPreviewBox(tf: Typeface?, isCurrent: Boolean): View {
+                val box = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(10f).toFloat()
+                        setColor(tokens.chipBg)
+                        setStroke(dp(1f), if (isCurrent) ColorUtils.setAlphaComponent(tokens.accent, 110) else tokens.cardBorder)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = dp(8f)
+                    }
+                }
+                val sampleTv = TextView(activity).apply {
+                    text = "The quick brown fox jumps over the lazy dog • 12345"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                    setTextColor(tokens.textPrimary)
+                    includeFontPadding = false
+                    if (tf != null) typeface = tf
+                }
+                box.addView(sampleTv)
+
+                val keyRow = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = dp(8f)
+                    }
+                }
+                val sampleLetters = listOf("Q", "W", "E", "R", "T", "Y")
+                for (letter in sampleLetters) {
+                    val k = TextView(activity).apply {
+                        text = letter
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+                        setTypeface(tf, Typeface.BOLD)
+                        setTextColor(if (isCurrent) tokens.accent else tokens.textPrimary)
+                        gravity = Gravity.CENTER
+                        includeFontPadding = false
+                        setPadding(0, 0, 0, 0)
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(4f).toFloat()
+                            setColor(tokens.surface)
+                            setStroke(dp(0.8f), if (isCurrent) ColorUtils.setAlphaComponent(tokens.accent, 90) else tokens.cardBorder)
+                        }
+                        layoutParams = LinearLayout.LayoutParams(0, dp(26f), 1f).apply {
+                            marginStart = dp(1.5f)
+                            marginEnd = dp(1.5f)
+                        }
+                    }
+                    keyRow.addView(k)
+                }
+                box.addView(keyRow)
+                return box
+            }
+
+            // Header for installed
+            val headerInst = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(4f), dp(4f), dp(4f), dp(8f))
+            }
+            headerInst.addView(ImageView(activity).apply {
+                setImageDrawable(ContextCompat.getDrawable(context, R.drawable.ic_check)?.mutate()?.apply { setTint(tokens.accent) })
+                val s = dp(16f)
+                layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(6f) }
+            })
+            headerInst.addView(TextView(activity).apply {
+                text = "INSTALLED FONTS (${installedFonts.size + 1})"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(tokens.accent)
+            })
+            listContainer.addView(headerInst)
+
+            // Default Font Row
+            val isDefActive = curFont == Skins.FONT_DEFAULT
+            val defCard = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(16f).toFloat()
+                    setColor(tokens.surface)
+                    setStroke(dp(1f), if (isDefActive) tokens.accent else tokens.cardBorder)
+                }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(10f)
+                }
+            }
+            val defRow = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val defCol = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8f) }
+            }
+            val defTitleRow = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            defTitleRow.addView(TextView(activity).apply {
+                text = "Inter / Default System"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(tokens.textPrimary)
+            })
+            if (isDefActive) {
+                defTitleRow.addView(TextView(activity).apply {
+                    text = " ACTIVE / BEING USED "
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.parseColor("#10B981"))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(6f).toFloat()
+                        setColor(ColorUtils.setAlphaComponent(Color.parseColor("#10B981"), 35))
+                    }
+                    setPadding(dp(6f), dp(2f), dp(6f), dp(2f))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        marginStart = dp(8f)
+                    }
+                })
+            }
+            defCol.addView(defTitleRow)
+            defCol.addView(TextView(activity).apply {
+                text = "Default high-legibility sans-serif font"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                setTextColor(tokens.textSecondary)
+                setPadding(0, dp(2f), 0, 0)
+            })
+            defRow.addView(defCol)
+            if (!isDefActive) {
+                val actBtn = TextView(activity).apply {
+                    text = "Apply"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(tokens.onAccentText)
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(12f).toFloat()
+                        setColor(tokens.accent)
+                    }
+                    setPadding(dp(14f), dp(7f), dp(14f), dp(7f))
+                    setOnClickListener {
+                        p.edit().putString(Skins.KEY_STUDIO_FONT, Skins.FONT_DEFAULT).putBoolean(Skins.KEY_USE_SYSTEM_FONT, false).apply()
+                        activity.notifySettingsChanged(restart = true)
+                        activity.showToast("Applied Default Font")
+                        render()
+                    }
+                }
+                defRow.addView(actBtn)
+            }
+            defCard.addView(defRow)
+            defCard.addView(renderFontPreviewBox(null, isDefActive))
+            listContainer.addView(defCard)
+
+            // Installed downloaded fonts
+            for (f in installedFonts) {
+                if (filterQuery.isNotEmpty() && !f.name.contains(filterQuery, ignoreCase = true) && !f.filename.contains(filterQuery, ignoreCase = true)) {
+                    continue
+                }
+                val isCurrent = curFont.equals(f.filename, ignoreCase = true) || curFont.equals(f.filename.removeSuffix(".ttf"), ignoreCase = true)
+                val card = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(16f).toFloat()
+                        setColor(tokens.surface)
+                        setStroke(dp(1f), if (isCurrent) tokens.accent else tokens.cardBorder)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = dp(10f)
+                    }
+                }
+
+                val row = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+
+                val col = LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8f) }
+                }
+
+                val titleRow = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                titleRow.addView(TextView(activity).apply {
+                    text = f.name
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(tokens.textPrimary)
+                })
+
+                if (isCurrent) {
+                    titleRow.addView(TextView(activity).apply {
+                        text = " ACTIVE / BEING USED "
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(Color.parseColor("#10B981"))
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(6f).toFloat()
+                            setColor(ColorUtils.setAlphaComponent(Color.parseColor("#10B981"), 35))
+                        }
+                        setPadding(dp(6f), dp(2f), dp(6f), dp(2f))
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            marginStart = dp(8f)
+                        }
+                    })
+                }
+                col.addView(titleRow)
+
+                val previewTf = FontExtensionManager.getTypeface(activity, f.filename)
+                col.addView(TextView(activity).apply {
+                    text = "${f.filename} • Custom typeface"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                    setTextColor(tokens.textSecondary)
+                    setPadding(0, dp(2f), 0, 0)
+                })
+                row.addView(col)
+
+                if (!isCurrent) {
+                    val actBtn = TextView(activity).apply {
+                        text = "Apply"
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(tokens.onAccentText)
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(12f).toFloat()
+                            setColor(tokens.accent)
+                        }
+                        setPadding(dp(14f), dp(7f), dp(14f), dp(7f))
+                        setOnClickListener {
+                            p.edit().putString(Skins.KEY_STUDIO_FONT, f.filename).apply()
+                            p.edit().putBoolean(Skins.KEY_USE_SYSTEM_FONT, false).apply()
+                            activity.notifySettingsChanged(restart = true)
+                            activity.showToast("Applied ${f.name} font to keycaps")
+                            render()
+                        }
+                    }
+                    row.addView(actBtn)
+                }
+
+                val delBtn = FrameLayout(activity).apply {
+                    val s = dp(34f)
+                    layoutParams = LinearLayout.LayoutParams(s, s).apply { marginStart = dp(8f) }
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(8f).toFloat()
+                        setColor(ColorUtils.setAlphaComponent(Color.RED, if (tokens.isLight) 25 else 40))
+                    }
+                    val iv = ImageView(activity).apply {
+                        val d = ContextCompat.getDrawable(context, R.drawable.ic_trash_2)?.mutate()
+                            ?: ContextCompat.getDrawable(context, R.drawable.ic_delete)?.mutate()
+                        d?.setTint(Color.parseColor("#FF5252"))
+                        setImageDrawable(d)
+                        val pad = dp(8f)
+                        setPadding(pad, pad, pad, pad)
+                        scaleType = ImageView.ScaleType.CENTER_INSIDE
+                    }
+                    addView(iv)
+                    setOnClickListener {
+                        FontExtensionManager.deleteFont(activity, f.filename)
+                        if (isCurrent) {
+                            p.edit().putString(Skins.KEY_STUDIO_FONT, Skins.FONT_DEFAULT).apply()
+                        }
+                        activity.showToast("Deleted ${f.name}")
+                        activity.notifySettingsChanged(restart = true)
+                        render()
+                    }
+                }
+                row.addView(delBtn)
+                card.addView(row)
+                card.addView(renderFontPreviewBox(previewTf, isCurrent))
+                listContainer.addView(card)
+            }
+
+            // Section 2: Online fonts
+            val available = remoteFonts.filter { !installedFilenames.contains(it.file.lowercase(Locale.ROOT)) }
+            if (available.isNotEmpty()) {
+                val headerAvail = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(4f), dp(14f), dp(4f), dp(8f))
+                }
+                headerAvail.addView(ImageView(activity).apply {
+                    setImageDrawable(ContextCompat.getDrawable(context, R.drawable.ic_download)?.mutate()?.apply { setTint(tokens.accent) })
+                    val s = dp(16f)
+                    layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(6f) }
+                })
+                headerAvail.addView(TextView(activity).apply {
+                    text = "AVAILABLE ONLINE FONTS (${available.size})"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(tokens.accent)
+                })
+                listContainer.addView(headerAvail)
+
+                for (item in available) {
+                    if (filterQuery.isNotEmpty() && !item.name.contains(filterQuery, ignoreCase = true) && !item.file.contains(filterQuery, ignoreCase = true)) {
+                        continue
+                    }
+                    val itemCard = LinearLayout(activity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(16f).toFloat()
+                            setColor(tokens.surface)
+                            setStroke(dp(1f), tokens.cardBorder)
+                        }
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            bottomMargin = dp(10f)
+                        }
+                    }
+
+                    val row = LinearLayout(activity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+
+                    val col = LinearLayout(activity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8f) }
+                    }
+                    col.addView(TextView(activity).apply {
+                        text = item.name
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(tokens.textPrimary)
+                    })
+                    val kb = if (item.size > 0) "${item.size / 1024} KB" else "TrueType Font"
+                    col.addView(TextView(activity).apply {
+                        text = "$kb • Clean custom keycap typeface"
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                        setTextColor(tokens.textSecondary)
+                        setPadding(0, dp(3f), 0, 0)
+                    })
+                    row.addView(col)
+
+                    val progressBar = ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply {
+                        isIndeterminate = false
+                        max = 100
+                        progress = 0
+                        visibility = View.GONE
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4f)).apply {
+                            topMargin = dp(8f)
+                        }
+                    }
+
+                    val dlBtn = TextView(activity).apply {
+                        text = "Download"
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(tokens.onAccentText)
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(12f).toFloat()
+                            setColor(tokens.accent)
+                        }
+                        setPadding(dp(14f), dp(7f), dp(14f), dp(7f))
+                        setOnClickListener {
+                            isEnabled = false
+                            progressBar.visibility = View.VISIBLE
+                            FontExtensionManager.downloadFont(activity, item, { pct ->
+                                activity.runOnUiThread { progressBar.progress = pct }
+                            }) { file ->
+                                val success = file != null && file.exists()
+                                activity.runOnUiThread {
+                                    if (success) {
+                                        activity.showToast("Downloaded ${item.name} font")
+                                        activity.notifySettingsChanged(restart = true)
+                                        render()
+                                    } else {
+                                        isEnabled = true
+                                        progressBar.visibility = View.GONE
+                                        activity.showToast("Download failed")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    row.addView(dlBtn)
+                    itemCard.addView(row)
+                    val previewHolder = FrameLayout(activity).apply {
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    }
+                    previewHolder.addView(renderFontPreviewBox(null, false))
+                    itemCard.addView(previewHolder)
+                    FontExtensionManager.loadPreviewTypeface(activity, item) { loadedTf ->
+                        if (loadedTf != null) {
+                            activity.runOnUiThread {
+                                previewHolder.removeAllViews()
+                                previewHolder.addView(renderFontPreviewBox(loadedTf, false))
+                            }
+                        }
+                    }
+                    itemCard.addView(progressBar)
+                    listContainer.addView(itemCard)
+                }
+            }
+        }
+
+        searchInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+                filterQuery = s?.toString()?.trim() ?: ""
+                render()
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
+        // Fetch catalog online
+        FontExtensionManager.fetchRemoteCatalog { catalog ->
+            if (catalog != null) {
+                remoteFonts = catalog
+                render()
+            }
+        }
+
+        render()
+        return root
     }
 
     private fun showAppInfoDialog() {

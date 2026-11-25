@@ -7,7 +7,8 @@ object MessageArmourEngine {
     enum class SensitiveType {
         CREDIT_CARD,
         OTP_CODE,
-        PRIVATE_KEY_OR_TOKEN
+        PRIVATE_KEY_OR_TOKEN,
+        PASSWORD_OR_CREDENTIAL
     }
 
     data class SensitiveMatch(
@@ -17,8 +18,14 @@ object MessageArmourEngine {
     )
 
     private val CC_PATTERN = Pattern.compile("""\b(?:\d[ -]*?){13,19}\b""")
-    private val OTP_PATTERN = Pattern.compile("""(?i)\b(?:otp|code|verification|pin)\b[:\s]*([0-9]{4,8})\b""")
-    private val API_KEY_PATTERN = Pattern.compile("""\b(?:sk_[a-zA-Z0-9]{24,}|ghp_[a-zA-Z0-9]{36}|AIza[0-9A-Za-z-_]{35})\b""")
+    private val OTP_LABELED_PATTERN = Pattern.compile("""(?i)\b(?:otp|code|verification|verify|pin|passcode|secret)\b[:\s#-]*([0-9]{4,8})\b""")
+    private val OTP_STANDALONE_PATTERN = Pattern.compile("""^\s*([0-9]{4,8}|[0-9]{3}[- ][0-9]{3})\s*$""")
+    private val OTP_PHRASE_PATTERN = Pattern.compile("""(?i)\b(?:is|use|enter)\s+([0-9]{4,8})\b""")
+    private val API_KEY_PATTERN = Pattern.compile(
+        """\b(?:sk_[a-zA-Z0-9_\-]{16,}|ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{22,}|AIza[0-9A-Za-z-_]{35}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9_\-\.]{20,}|eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,})\b"""
+    )
+    private val PRIVATE_KEY_PATTERN = Pattern.compile("""-----BEGIN [A-Z ]*PRIVATE KEY-----""")
+    private val PASSWORD_PATTERN = Pattern.compile("""(?i)\b(?:password|passwd|pwd|pass)\b[:=\s]+([^\s,;]+)""")
 
     private fun passesLuhnCheck(numberStr: String): Boolean {
         val digits = numberStr.filter { it.isDigit() }
@@ -37,6 +44,8 @@ object MessageArmourEngine {
         return (sum % 10 == 0)
     }
 
+    fun isSensitive(text: String): Boolean = scan(text).isNotEmpty()
+
     fun scan(text: String): List<SensitiveMatch> {
         val matches = mutableListOf<SensitiveMatch>()
         if (text.isBlank()) return matches
@@ -53,19 +62,54 @@ object MessageArmourEngine {
             }
         }
 
-        val otpMatcher = OTP_PATTERN.matcher(text)
-        while (otpMatcher.find()) {
-            val code = otpMatcher.group(1) ?: ""
+        val otpLabeledMatcher = OTP_LABELED_PATTERN.matcher(text)
+        while (otpLabeledMatcher.find()) {
+            val code = otpLabeledMatcher.group(1) ?: ""
             if (code.length in 4..8) {
                 matches.add(SensitiveMatch(SensitiveType.OTP_CODE, "******", "One-Time Password (OTP) detected"))
             }
         }
 
+        if (matches.isEmpty() && OTP_STANDALONE_PATTERN.matcher(text).matches()) {
+            matches.add(SensitiveMatch(SensitiveType.OTP_CODE, "******", "One-Time Password (OTP) detected"))
+        }
+
+        val otpPhraseMatcher = OTP_PHRASE_PATTERN.matcher(text)
+        while (otpPhraseMatcher.find()) {
+            val code = otpPhraseMatcher.group(1) ?: ""
+            if (code.length in 4..8 && !matches.any { it.type == SensitiveType.OTP_CODE }) {
+                matches.add(SensitiveMatch(SensitiveType.OTP_CODE, "******", "Verification code detected"))
+            }
+        }
+
         val tokenMatcher = API_KEY_PATTERN.matcher(text)
         while (tokenMatcher.find()) {
-            matches.add(SensitiveMatch(SensitiveType.PRIVATE_KEY_OR_TOKEN, "sk_...***", "API Secret key / Token detected"))
+            val raw = tokenMatcher.group()
+            val masked = if (raw.length > 8) raw.take(4) + "...***" else "***"
+            matches.add(SensitiveMatch(SensitiveType.PRIVATE_KEY_OR_TOKEN, masked, "API Secret key / Token detected"))
+        }
+
+        if (PRIVATE_KEY_PATTERN.matcher(text).find()) {
+            matches.add(SensitiveMatch(SensitiveType.PRIVATE_KEY_OR_TOKEN, "-----BEGIN PRIVATE KEY----- [MASKED]", "Private cryptographic key detected"))
+        }
+
+        val pwdMatcher = PASSWORD_PATTERN.matcher(text)
+        while (pwdMatcher.find()) {
+            matches.add(SensitiveMatch(SensitiveType.PASSWORD_OR_CREDENTIAL, "Password: ••••••••", "Account password detected"))
         }
 
         return matches
+    }
+
+    fun getMaskedSnippet(text: String): String {
+        val matches = scan(text)
+        if (matches.isEmpty()) return text
+        val first = matches.first()
+        return when (first.type) {
+            SensitiveType.CREDIT_CARD -> "Card: ${first.maskedValue}"
+            SensitiveType.OTP_CODE -> "OTP: ••••••"
+            SensitiveType.PRIVATE_KEY_OR_TOKEN -> "Token: ${first.maskedValue}"
+            SensitiveType.PASSWORD_OR_CREDENTIAL -> "Protected Credential: ••••••••"
+        }
     }
 }

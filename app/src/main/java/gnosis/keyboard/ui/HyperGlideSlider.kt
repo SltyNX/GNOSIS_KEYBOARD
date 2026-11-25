@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Shader
@@ -80,6 +81,16 @@ class HyperGlideSliderView @JvmOverloads constructor(
     private val trackRect = RectF()
     private val activeTrackRect = RectF()
 
+    private var cachedTrackWidth = -1f
+    private var cachedAccentColor = 0
+    private var cachedIsRtl: Boolean? = null
+    private var trackShader: LinearGradient? = null
+
+    private val thumbMatrix = Matrix()
+    private var thumbShader: LinearGradient? = null
+    private var cachedThumbAccent = 0
+    private var cachedThumbRadius = -1f
+
     init {
         isClickable = true
         isFocusable = true
@@ -136,12 +147,18 @@ class HyperGlideSliderView @JvmOverloads constructor(
             val gradStart = ColorUtils.blendARGB(accentColor, Color.parseColor("#7C3AED"), 0.45f)
             val gradEnd = ColorUtils.blendARGB(accentColor, Color.parseColor("#38BDF8"), 0.25f)
 
-            activeTrackPaint.shader = LinearGradient(
-                activeTrackRect.left, centerY, activeTrackRect.right.coerceAtLeast(activeTrackRect.left + 1f), centerY,
-                if (isRtl) gradEnd else gradStart,
-                if (isRtl) gradStart else gradEnd,
-                Shader.TileMode.CLAMP
-            )
+            if (trackShader == null || cachedTrackWidth != trackWidth || cachedAccentColor != accentColor || cachedIsRtl != isRtl) {
+                cachedTrackWidth = trackWidth
+                cachedAccentColor = accentColor
+                cachedIsRtl = isRtl
+                trackShader = LinearGradient(
+                    paddingLeft - trackCornerRadius, centerY, paddingRight + trackCornerRadius, centerY,
+                    if (isRtl) gradEnd else gradStart,
+                    if (isRtl) gradStart else gradEnd,
+                    Shader.TileMode.CLAMP
+                )
+            }
+            activeTrackPaint.shader = trackShader
             canvas.drawRoundRect(activeTrackRect, trackCornerRadius, trackCornerRadius, activeTrackPaint)
 
             glowPaint.color = ColorUtils.setAlphaComponent(accentColor, 40)
@@ -151,13 +168,20 @@ class HyperGlideSliderView @JvmOverloads constructor(
         glowPaint.color = ColorUtils.setAlphaComponent(accentColor, if (isDragging) 75 else 45)
         canvas.drawCircle(thumbX, centerY, currentThumbRadius + (3.5f * d), glowPaint)
 
-        val thumbTop = ColorUtils.blendARGB(accentColor, Color.WHITE, 0.24f)
-        val thumbBottom = ColorUtils.blendARGB(accentColor, Color.BLACK, 0.15f)
-        thumbPaint.shader = LinearGradient(
-            thumbX - currentThumbRadius, centerY - currentThumbRadius,
-            thumbX + currentThumbRadius, centerY + currentThumbRadius,
-            thumbTop, thumbBottom, Shader.TileMode.CLAMP
-        )
+        if (thumbShader == null || cachedThumbAccent != accentColor || cachedThumbRadius != currentThumbRadius) {
+            cachedThumbAccent = accentColor
+            cachedThumbRadius = currentThumbRadius
+            val thumbTop = ColorUtils.blendARGB(accentColor, Color.WHITE, 0.24f)
+            val thumbBottom = ColorUtils.blendARGB(accentColor, Color.BLACK, 0.15f)
+            thumbShader = LinearGradient(
+                -currentThumbRadius, -currentThumbRadius,
+                currentThumbRadius, currentThumbRadius,
+                thumbTop, thumbBottom, Shader.TileMode.CLAMP
+            )
+        }
+        thumbMatrix.setTranslate(thumbX, centerY)
+        thumbShader?.setLocalMatrix(thumbMatrix)
+        thumbPaint.shader = thumbShader
         canvas.drawCircle(thumbX, centerY, currentThumbRadius, thumbPaint)
 
         thumbRimPaint.strokeWidth = 2.4f * d

@@ -305,6 +305,10 @@ object ClipboardHistory {
 
             val text = item.text?.toString()?.trim()
             if (!text.isNullOrEmpty() && text.length < 5000) {
+                val top = inMemoryHistory.firstOrNull()
+                if (top != null && !top.isImage && top.text == text) {
+                    return
+                }
                 addText(ctx, text)
             }
         } catch (_: Exception) {}
@@ -386,6 +390,31 @@ object ClipboardHistory {
         init(ctx)
         return if (category == null) inMemoryHistory.toList()
         else inMemoryHistory.filter { it.category == category }
+    }
+
+    @Synchronized
+    fun addSnippet(ctx: Context, text: String, pinned: Boolean = true): ClipItem? {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return null
+        init(ctx)
+        val existing = inMemoryHistory.find { !it.isImage && it.text == trimmed }
+        if (existing != null) {
+            existing.isPinned = pinned
+            save(ctx)
+            notifyChanged()
+            return existing
+        }
+        val item = ClipItem(
+            text = trimmed,
+            isImage = false,
+            isPinned = pinned,
+            category = CAT_TEXT,
+            timestamp = System.currentTimeMillis()
+        )
+        inMemoryHistory.add(0, item)
+        save(ctx)
+        notifyChanged()
+        return item
     }
 
     @Synchronized
@@ -480,7 +509,12 @@ object ClipboardHistory {
 
         try {
             val contentUri = FileProvider.getUriForFile(ctx, FILE_PROVIDER_AUTHORITY, file)
-            val description = ClipDescription("Clipboard Image", arrayOf(item.mimeType))
+            val mimes = when {
+                item.mimeType.equals("image/webp", ignoreCase = true) -> arrayOf("image/webp", "image/png")
+                item.mimeType.equals("image/png", ignoreCase = true) -> arrayOf("image/png", "image/webp")
+                else -> arrayOf(item.mimeType)
+            }
+            val description = ClipDescription("Clipboard Image", mimes)
 
             val supportedMimes = EditorInfoCompat.getContentMimeTypes(editorInfo)
             var supported = false

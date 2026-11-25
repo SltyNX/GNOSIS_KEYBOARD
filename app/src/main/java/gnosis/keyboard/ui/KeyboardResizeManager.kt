@@ -291,8 +291,8 @@ class KeyboardResizeManager(private val context: Context) {
     ): View {
         val overlay = object : FrameLayout(context) {
             override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                val targetH = targetView.measuredHeight
-                val targetW = targetView.measuredWidth
+                val targetH = if (targetView.height > 0) targetView.height else targetView.measuredHeight
+                val targetW = if (targetView.width > 0) targetView.width else targetView.measuredWidth
                 val finalW = if (targetW > 0) targetW else MeasureSpec.getSize(widthMeasureSpec)
                 val finalH = if (targetH > 0) targetH else dp(260f)
                 super.onMeasure(
@@ -688,13 +688,4 @@ class KeyboardResizeManager(private val context: Context) {
         overlay.addView(actionBar)
         return overlay
     }
-
-    fun createGboardResizeOverlay(
-        targetView: View,
-        accentColor: Int,
-        textColor: Int,
-        surfaceColor: Int,
-        onHeightChanged: (Int) -> Unit,
-        onDismiss: (saved: Boolean) -> Unit
-    ): View = createGnosisResizeOverlay(targetView, accentColor, textColor, surfaceColor, onHeightChanged, onDismiss)
 }

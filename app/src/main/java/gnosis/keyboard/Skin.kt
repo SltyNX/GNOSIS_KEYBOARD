@@ -116,6 +116,8 @@ object Skins {
     const val PREFS = "gnosis_kb"
     const val KEY_THEME = "theme"
     const val KEY_THEME_MODE = "theme_mode"
+    const val KEY_APP_THEME_MODE = "app_theme_mode"
+    const val KEY_KEYBOARD_THEME_MODE = "keyboard_theme_mode"
     const val KEY_LAST_DARK = "theme_last_dark"
     const val KEY_KEY_STYLE = "key_style"
     const val MODE_DARK = "dark"
@@ -127,6 +129,21 @@ object Skins {
     const val STYLE_NEUMORPHIC = "neumorphic"
     const val KEY_ACCENT = "accent_color"
     const val KEY_KEY_BORDERS = "key_borders"
+    const val KEY_REVAMPED_TOOLBAR_ICON_SIZE = "revamped_toolbar_icon_size"
+    const val KEY_CLASSIC_TOOLBAR_ICON_SIZE = "classic_toolbar_icon_size"
+    const val DEFAULT_REVAMPED_TOOLBAR_ICON_SIZE = 32
+    const val DEFAULT_CLASSIC_TOOLBAR_ICON_SIZE = 32
+    const val KEY_TOOLBAR_HEIGHT_REVAMPED = "toolbar_height_revamped"
+    const val KEY_TOOLBAR_HEIGHT_CLASSIC = "toolbar_height_classic"
+    const val DEFAULT_TOOLBAR_HEIGHT_REVAMPED = 42
+    const val DEFAULT_TOOLBAR_HEIGHT_CLASSIC = 42
+    const val KEY_KEYBOARD_HEIGHT_CLASSIC = "keyboard_height_classic"
+    const val DEFAULT_KEYBOARD_HEIGHT_CLASSIC = 45
+    const val KEY_SPACE_HOLD_SWITCH_LAYOUT = "space_hold_switch_layout"
+    const val DEFAULT_SPACE_HOLD_SWITCH_LAYOUT = true
+    const val KEY_ONLINE_PREDICTIONS = "online_predictions_enabled"
+    const val DEFAULT_ONLINE_PREDICTIONS = true
+    const val DEFAULT_AUTOCORRECT = true
     const val KEY_HIGH_CONTRAST = "high_contrast"
     const val KEY_ONE_HANDED = "one_handed"
     const val KEY_FLOATING = "floating_keyboard"
@@ -171,6 +188,10 @@ object Skins {
     const val DEFAULT_SECONDARY_HINTS = true
     const val KEY_USE_SYSTEM_FONT = "studio_use_system_font"
     const val DEFAULT_USE_SYSTEM_FONT = false
+    const val KEY_PARTICLE_EFFECTS = "particle_effects_style"
+    const val DEFAULT_PARTICLE_EFFECTS = "off"
+    const val KEY_COOL_FONT = "cool_font_active_style"
+    const val DEFAULT_COOL_FONT = "normal"
 
     const val KEY_STUDIO_SHAPE = "studio_key_shape"
     const val SHAPE_ROUNDED = "rounded"
@@ -217,6 +238,7 @@ object Skins {
     const val KEY_SIDE_PADDING_LANDSCAPE = "studio_side_padding_landscape"
     const val KEY_LANDSCAPE_SIDE_PAD = KEY_SIDE_PADDING_LANDSCAPE
     const val KEY_LANDSCAPE_SPLIT = "landscape_split_enabled"
+    const val KEY_SPLIT_KEYBOARD_ENABLED = "split_keyboard_enabled"
 
     const val KEY_HYPER_DYNAMIC = "hyper_dynamic_colors"
     const val KEY_HYPER_AURORA = "hyper_aurora_bg"
@@ -269,9 +291,14 @@ object Skins {
 
     const val THEME_MD3_DYNAMIC = "md3_dynamic"
     const val THEME_MD3_DYNAMIC_LIGHT = "md3_dynamic_light"
+    const val DEFAULT_THEME = THEME_MD3_DYNAMIC
     const val THEME_LUCID_VOID = "lucid-void"
     const val THEME_LUCID_VOID_LIGHT = "lucid-void_light"
 
+    const val KEY_LUCID_VOID_TINT = "lucid_void_tint"
+    const val DEFAULT_LUCID_VOID_TINT = 50
+
+    // Legacy fallback keys
     const val KEY_LUCID_VOID_OPACITY = "lucid_void_opacity"
     const val KEY_LUCID_VOID_BLUR = "lucid_void_blur"
     const val KEY_LUCID_VOID_OPACITY_DARK = "lucid_void_opacity_dark"
@@ -281,12 +308,12 @@ object Skins {
     const val KEY_LUCID_VOID_TINT_DARK = "lucid_void_tint_dark"
     const val KEY_LUCID_VOID_TINT_LIGHT = "lucid_void_tint_light"
 
-    const val DEFAULT_LUCID_VOID_OPACITY_DARK = 48
-    const val DEFAULT_LUCID_VOID_OPACITY_LIGHT = 44
-    const val DEFAULT_LUCID_VOID_BLUR_DARK = 48
-    const val DEFAULT_LUCID_VOID_BLUR_LIGHT = 42
-    const val DEFAULT_LUCID_VOID_TINT_DARK = 25
-    const val DEFAULT_LUCID_VOID_TINT_LIGHT = 20
+    const val DEFAULT_LUCID_VOID_OPACITY_DARK = 50
+    const val DEFAULT_LUCID_VOID_OPACITY_LIGHT = 50
+    const val DEFAULT_LUCID_VOID_BLUR_DARK = 0
+    const val DEFAULT_LUCID_VOID_BLUR_LIGHT = 0
+    const val DEFAULT_LUCID_VOID_TINT_DARK = 50
+    const val DEFAULT_LUCID_VOID_TINT_LIGHT = 50
 
     object KeyboardTheme {
         const val LUCID_VOID = "lucid-void"
@@ -296,15 +323,15 @@ object Skins {
     val PRESETS = mapOf(
         "lucid-void" to ThemePreset(
             id = "lucid-void", name = "Lucid Void",
-            bg = "#330A0D14", surface = "#240A0D14", key = "#291E293B", keyBorder = "#2E94A3B8",
-            text = "#F8FAFC", muted = "#94A3B8", defaultAccent = "#4D0091FF",
-            chip = "#240A0D14", chipBorder = "#2E94A3B8", isLight = false
+            bg = "#290A0A0E", surface = "#24121216", key = "#291E1E24", keyBorder = "#38FFFFFF",
+            text = "#F8FAFC", muted = "#A1A1AA", defaultAccent = "#E4E4E7",
+            chip = "#24141418", chipBorder = "#33FFFFFF", isLight = false
         ),
         "lucid-void_light" to ThemePreset(
             id = "lucid-void_light", name = "Lucid Void Light",
             bg = "#2EFFFFFF", surface = "#1FFFFFFF", key = "#47FFFFFF", keyBorder = "#66FFFFFF",
-            text = "#E60F172A", muted = "#64748B", defaultAccent = "#52007AFF",
-            chip = "#1FFFFFFF", chipBorder = "#66FFFFFF", isLight = true
+            text = "#18181B", muted = "#71717A", defaultAccent = "#18181B",
+            chip = "#1FFFFFFF", chipBorder = "#4DFFFFFF", isLight = true
         ),
         "md3_dynamic" to ThemePreset(
             id = "md3_dynamic", name = "Material You",
@@ -532,6 +559,8 @@ object Skins {
     }
 
     private fun states(normal: Drawable, pressed: Drawable) = StateListDrawable().apply {
+        setEnterFadeDuration(15)
+        setExitFadeDuration(60)
         addState(intArrayOf(android.R.attr.state_pressed), pressed)
         addState(intArrayOf(), normal)
     }
@@ -569,18 +598,22 @@ object Skins {
             val pairedDark = getPairedThemeId(chosen, targetLight = false)
             if (PRESETS[pairedDark]?.isLight == false) return pairedDark
         }
-        return "md3_dynamic"
+        return THEME_MD3_DYNAMIC
     }
 
     fun resolveThemeId(ctx: Context, p: SharedPreferences = prefs(ctx)): String {
-        val chosen = p.getString(KEY_THEME, "md3_dynamic") ?: "md3_dynamic"
+        val chosen = p.getString(KEY_THEME, THEME_MD3_DYNAMIC) ?: THEME_MD3_DYNAMIC
         val effectiveChosen = if (chosen.contains("void_lucent") || chosen.contains("void_glass") || chosen.contains("liquid_glass")) {
-            p.edit().putString(KEY_THEME, "md3_dynamic").apply()
-            "md3_dynamic"
+            p.edit().putString(KEY_THEME, THEME_MD3_DYNAMIC).apply()
+            THEME_MD3_DYNAMIC
         } else {
             chosen
         }
-        val mode = p.getString(KEY_THEME_MODE, MODE_AUTO) ?: MODE_AUTO
+        val mode = if (p.contains(KEY_KEYBOARD_THEME_MODE)) {
+            p.getString(KEY_KEYBOARD_THEME_MODE, MODE_AUTO) ?: MODE_AUTO
+        } else {
+            p.getString(KEY_THEME_MODE, MODE_AUTO) ?: MODE_AUTO
+        }
         return when (mode) {
             MODE_LIGHT -> getPairedThemeId(effectiveChosen, targetLight = true)
             MODE_DARK -> getPairedThemeId(effectiveChosen, targetLight = false)
@@ -612,19 +645,23 @@ object Skins {
         useSystemFont: Boolean = false
     ): Typeface {
         val styleInt = if (bold) Typeface.BOLD else Typeface.NORMAL
-        if (useSystemFont || fontStyle == FONT_DEFAULT || fontStyle.isBlank()) {
+        if (useSystemFont) {
             return Typeface.create(Typeface.DEFAULT, styleInt)
         }
-        if (ctx != null) {
+        if (ctx != null && fontStyle != FONT_DEFAULT && fontStyle.isNotBlank()) {
             val customTf = FontExtensionManager.getTypeface(ctx, fontStyle, bold)
             if (customTf != null) return customTf
         }
         return when (fontStyle) {
             FONT_SERIF -> Typeface.create(Typeface.SERIF, styleInt)
             FONT_MONO -> Typeface.create(Typeface.MONOSPACE, styleInt)
-            FONT_ROUNDED -> Typeface.create("sans-serif-medium", styleInt)
+            FONT_ROUNDED -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                Typeface.create(Typeface.create("sans-serif-rounded", Typeface.NORMAL), if (bold) 700 else 400, false)
+            } else {
+                Typeface.create("sans-serif-medium", styleInt)
+            }
             FONT_CONDENSED -> Typeface.create("sans-serif-condensed", styleInt)
-            FONT_LIGHT -> Typeface.create("sans-serif-light", styleInt)
+            FONT_LIGHT -> if (bold) Typeface.create("sans-serif", Typeface.NORMAL) else Typeface.create("sans-serif-light", Typeface.NORMAL)
             else -> Typeface.create(Typeface.DEFAULT, styleInt)
         }
     }
@@ -941,7 +978,7 @@ object Skins {
             strokePaint.colorFilter = colorFilter
         }
 
-        @Deprecated("Deprecated in Java")
+        @Suppress("DEPRECATION")
         override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
@@ -996,7 +1033,7 @@ object Skins {
             paint.colorFilter = colorFilter
         }
 
-        @Deprecated("Deprecated in Java")
+        @Suppress("DEPRECATION")
         override fun getOpacity(): Int = PixelFormat.OPAQUE
     }
 
@@ -1141,7 +1178,7 @@ object Skins {
         val borderWidthDp = prefFloat(p, KEY_STUDIO_BORDER_WIDTH, 0f).coerceIn(0f, 4f)
         val shadowDp = prefFloat(p, KEY_STUDIO_SHADOW, 0f).coerceIn(0f, 12f)
         val fontStyle = p.getString(KEY_STUDIO_FONT, FONT_DEFAULT) ?: FONT_DEFAULT
-        val fontBold = p.getBoolean(KEY_STUDIO_FONT_BOLD, true)
+        val fontBold = p.getBoolean(KEY_STUDIO_FONT_BOLD, false)
         val rawFontScale = prefFloat(p, KEY_STUDIO_FONT_SCALE, 0.80f)
         val fontScale = (if (rawFontScale > 10f) rawFontScale / 100f else rawFontScale).coerceIn(0.80f, 1.30f)
         val useSystemFont = p.getBoolean(KEY_USE_SYSTEM_FONT, DEFAULT_USE_SYSTEM_FONT)
@@ -1204,47 +1241,29 @@ object Skins {
         var rawAccent = rawAccentPref
 
         val isLucidVoid = (themeId == THEME_LUCID_VOID || themeId == THEME_LUCID_VOID_LIGHT)
-        val defaultBlur = if (preset.isLight) DEFAULT_LUCID_VOID_BLUR_LIGHT else DEFAULT_LUCID_VOID_BLUR_DARK
-        val blurKey = if (preset.isLight) KEY_LUCID_VOID_BLUR_LIGHT else KEY_LUCID_VOID_BLUR_DARK
-        val lucidBlurRadius = if (isLucidVoid) {
-            prefInt(p, blurKey, prefInt(p, KEY_LUCID_VOID_BLUR, defaultBlur)).toFloat().coerceIn(0f, 100f)
-        } else 0f
-
-        val defaultOp = if (preset.isLight) DEFAULT_LUCID_VOID_OPACITY_LIGHT else DEFAULT_LUCID_VOID_OPACITY_DARK
-        val opKey = if (preset.isLight) KEY_LUCID_VOID_OPACITY_LIGHT else KEY_LUCID_VOID_OPACITY_DARK
-        val userOpPct = if (isLucidVoid) {
-            prefInt(p, opKey, prefInt(p, KEY_LUCID_VOID_OPACITY, defaultOp)).coerceIn(5, 95)
-        } else 100
-        val opFactor = userOpPct / 100f
-
-        val tintPct = if (isLucidVoid) {
-            if (preset.isLight) {
-                prefInt(p, KEY_LUCID_VOID_TINT_LIGHT, DEFAULT_LUCID_VOID_TINT_LIGHT).coerceIn(0, 100)
-            } else {
-                prefInt(p, KEY_LUCID_VOID_TINT_DARK, DEFAULT_LUCID_VOID_TINT_DARK).coerceIn(0, 100)
-            }
-        } else 0
-        val tintFactor = tintPct / 100f
+        val tintScale = if (isLucidVoid) {
+            prefInt(p, KEY_LUCID_VOID_TINT, DEFAULT_LUCID_VOID_TINT).coerceIn(1, 100)
+        } else 50
+        val glassFactor = (tintScale - 1f) / 99f // 0.0f = ultra clear & transparent, 1.0f = opaque smoked glass
 
         if (isLucidVoid) {
-            rawAccent = Color.parseColor(preset.defaultAccent)
-            val alpha255 = (opFactor * 255f).toInt().coerceIn(16, 248)
-            val baseBg = if (preset.isLight) {
-                if (tintFactor > 0f) ColorUtils.blendARGB(Color.parseColor(preset.bg), Color.parseColor("#94A3B8"), tintFactor * 0.40f)
-                else Color.parseColor(preset.bg)
+            rawAccent = if (p.contains(KEY_ACCENT)) rawAccentPref else Color.parseColor(preset.defaultAccent)
+            if (preset.isLight) {
+                val bgAlpha = (35 + glassFactor * 205).toInt().coerceIn(30, 245)
+                val surfAlpha = (25 + glassFactor * 190).toInt().coerceIn(20, 235)
+                val keyAlpha = (45 + glassFactor * 185).toInt().coerceIn(35, 245)
+                bgCol = ColorUtils.setAlphaComponent(Color.WHITE, bgAlpha)
+                surfCol = ColorUtils.setAlphaComponent(Color.parseColor("#F8F9FA"), surfAlpha)
+                keyCol = ColorUtils.setAlphaComponent(Color.WHITE, keyAlpha)
             } else {
-                if (tintFactor > 0f) ColorUtils.blendARGB(Color.parseColor(preset.bg), Color.parseColor("#334155"), tintFactor * 0.45f)
-                else Color.parseColor(preset.bg)
+                // Dark sleek dark glass: deep smoked obsidian, zero blue tint
+                val bgAlpha = (30 + glassFactor * 216).toInt().coerceIn(25, 250)
+                val surfAlpha = (22 + glassFactor * 200).toInt().coerceIn(18, 240)
+                val keyAlpha = (26 + glassFactor * 190).toInt().coerceIn(20, 240)
+                bgCol = ColorUtils.setAlphaComponent(Color.parseColor("#0A0A0E"), bgAlpha)
+                surfCol = ColorUtils.setAlphaComponent(Color.parseColor("#14141A"), surfAlpha)
+                keyCol = ColorUtils.setAlphaComponent(Color.parseColor("#1E1E26"), keyAlpha)
             }
-            val baseSurf = if (preset.isLight) {
-                if (tintFactor > 0f) ColorUtils.blendARGB(Color.parseColor(preset.surface), Color.parseColor("#64748B"), tintFactor * 0.40f)
-                else Color.parseColor(preset.surface)
-            } else {
-                if (tintFactor > 0f) ColorUtils.blendARGB(Color.parseColor(preset.surface), Color.parseColor("#1E293B"), tintFactor * 0.45f)
-                else Color.parseColor(preset.surface)
-            }
-            bgCol = ColorUtils.setAlphaComponent(baseBg, alpha255)
-            surfCol = ColorUtils.setAlphaComponent(baseSurf, (alpha255 * 0.80f).toInt().coerceIn(12, 242))
         }
         val isMd3Dynamic = (themeId == THEME_MD3_DYNAMIC || themeId == THEME_MD3_DYNAMIC_LIGHT)
         val md3Palette = if (isMd3Dynamic) {
@@ -1274,8 +1293,18 @@ object Skins {
         val borderCol = if (hasVisibleBorder) presetBorder else Color.TRANSPARENT
         val textCol = md3Palette?.text ?: Color.parseColor(preset.text)
         val mutedCol = md3Palette?.muted ?: Color.parseColor(preset.muted)
-        val chipCol = md3Palette?.chip ?: (if (hyperDynamic) surfCol else Color.parseColor(preset.chip))
-        val chipBorderCol = md3Palette?.chipBorder ?: (if (hyperDynamic) presetBorder else Color.parseColor(preset.chipBorder))
+        val rawChipCol = md3Palette?.chip ?: (if (hyperDynamic) ColorUtils.blendARGB(surfCol, textCol, if (preset.isLight) 0.08f else 0.14f) else Color.parseColor(preset.chip))
+        val chipCol = if (safeContrast(rawChipCol, surfCol) < 1.30) {
+            ColorUtils.blendARGB(surfCol, if (preset.isLight) Color.BLACK else Color.WHITE, if (preset.isLight) 0.12f else 0.18f)
+        } else {
+            rawChipCol
+        }
+        val rawChipBorder = md3Palette?.chipBorder ?: (if (hyperDynamic) presetBorder else Color.parseColor(preset.chipBorder))
+        val chipBorderCol = if (safeContrast(rawChipBorder, surfCol) < 1.45) {
+            ColorUtils.blendARGB(surfCol, if (preset.isLight) Color.BLACK else Color.WHITE, if (preset.isLight) 0.25f else 0.35f)
+        } else {
+            rawChipBorder
+        }
         val effectiveAccent = ensureContrast(rawAccent, listOf(bgCol, surfCol, keyCol, chipCol))
 
         val barSurfaces = listOf(bgCol, surfCol, chipCol)
@@ -1321,28 +1350,20 @@ object Skins {
             val d = ctx.resources.displayMetrics.density
             val topRadius = 20f * d
             val strokeW = (1.2f * d).toInt().coerceAtLeast(1)
-            val strokeAlpha = if (preset.isLight) {
-                ((opFactor * 0.40f + 0.35f) * 255).toInt().coerceIn(40, 240)
-            } else {
-                ((opFactor * 0.30f + 0.20f) * 255).toInt().coerceIn(30, 220)
-            }
             val strokeCol = if (preset.isLight) {
-                val tintedStroke = ColorUtils.blendARGB(Color.WHITE, Color.parseColor("#94A3B8"), tintFactor * 0.25f)
-                ColorUtils.setAlphaComponent(tintedStroke, strokeAlpha)
+                ColorUtils.setAlphaComponent(Color.WHITE, (60 + glassFactor * 120).toInt().coerceIn(50, 220))
             } else {
-                ColorUtils.setAlphaComponent(Color.parseColor("#94A3B8"), strokeAlpha)
+                ColorUtils.setAlphaComponent(Color.WHITE, (30 + (1f - glassFactor * 0.35f) * 60).toInt().coerceIn(25, 120))
             }
             val startCol = if (preset.isLight) {
-                val tintedStart = ColorUtils.blendARGB(Color.WHITE, Color.parseColor("#94A3B8"), tintFactor * 0.35f)
-                ColorUtils.setAlphaComponent(tintedStart, (opFactor * 0.85f * 255).toInt().coerceIn(20, 240))
+                ColorUtils.setAlphaComponent(Color.WHITE, (40 + glassFactor * 190).toInt().coerceIn(30, 240))
             } else {
-                ColorUtils.setAlphaComponent(Color.parseColor("#0A0D14"), (opFactor * 0.95f * 255).toInt().coerceIn(25, 250))
+                ColorUtils.setAlphaComponent(Color.parseColor("#0C0C10"), (28 + glassFactor * 215).toInt().coerceIn(25, 250))
             }
             val endCol = if (preset.isLight) {
-                val tintedEnd = ColorUtils.blendARGB(Color.parseColor("#F1F5F9"), Color.parseColor("#64748B"), tintFactor * 0.35f)
-                ColorUtils.setAlphaComponent(tintedEnd, (opFactor * 0.70f * 255).toInt().coerceIn(15, 230))
+                ColorUtils.setAlphaComponent(Color.parseColor("#E9ECEF"), (30 + glassFactor * 185).toInt().coerceIn(20, 230))
             } else {
-                ColorUtils.setAlphaComponent(Color.parseColor("#141923"), (opFactor * 0.85f * 255).toInt().coerceIn(20, 245))
+                ColorUtils.setAlphaComponent(Color.parseColor("#060608"), (35 + glassFactor * 215).toInt().coerceIn(30, 252))
             }
             GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(startCol, endCol)).apply {
                 cornerRadii = floatArrayOf(
@@ -1412,18 +1433,22 @@ object Skins {
                 isActionKey = false,
                 isPressed = false
             )
+            val pressStroke = if (hasVisibleBorder) {
+                if (special) effectiveAccent else ColorUtils.blendARGB(baseStroke, effectiveAccent, 0.35f)
+            } else Color.TRANSPARENT
+
             val pressedD = StudioKeyDrawable(
                 density = d,
                 fillColor = pressFill,
                 shape = keyShape,
                 radiusDp = effRadius,
                 strokeWidthDp = effStrokeW.coerceAtLeast(1f),
-                strokeColor = effectiveAccent,
+                strokeColor = pressStroke,
                 shadowDp = (effShadow * 0.5f),
                 shadowCustomColor = override?.shadowColor,
                 isLight = preset.isLight,
                 glassEnabled = glassEnabled,
-                glassOpacity = (glassOpacity + 15).coerceAtMost(95),
+                glassOpacity = (glassOpacity + 12).coerceAtMost(95),
                 glassSpecular = glassSpecular,
                 accentColor = effectiveAccent,
                 isActionKey = false,
@@ -1449,55 +1474,55 @@ object Skins {
             val pressStroke: Int
 
             if (preset.isLight) {
-                val whiteBase = if (tintFactor > 0f) ColorUtils.blendARGB(Color.WHITE, Color.parseColor("#CBD5E1"), tintFactor * 0.35f) else Color.WHITE
-                val slateBase = if (tintFactor > 0f) ColorUtils.blendARGB(Color.parseColor("#E2E8F0"), Color.parseColor("#94A3B8"), tintFactor * 0.35f) else Color.parseColor("#E2E8F0")
-                val strokeBase = if (tintFactor > 0f) ColorUtils.blendARGB(Color.WHITE, Color.parseColor("#CBD5E1"), tintFactor * 0.20f) else Color.WHITE
+                val whiteBase = Color.WHITE
+                val slateBase = Color.parseColor("#F1F3F5")
+                val strokeBase = Color.WHITE
 
                 if (isAction) {
-                    normalStart = ColorUtils.setAlphaComponent(whiteBase, ((opFactor * 0.85f + 0.18f) * 255).toInt().coerceIn(35, 250))
-                    normalEnd = ColorUtils.setAlphaComponent(slateBase, ((opFactor * 0.65f + 0.12f) * 255).toInt().coerceIn(28, 235))
-                    normalStroke = ColorUtils.setAlphaComponent(strokeBase, ((opFactor * 0.55f + 0.30f) * 255).toInt().coerceIn(60, 255))
-                    pressStart = ColorUtils.setAlphaComponent(whiteBase, 245)
-                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#F1F5F9"), 235)
-                    pressStroke = strokeBase
+                    normalStart = ColorUtils.setAlphaComponent(whiteBase, (60 + glassFactor * 180).toInt().coerceIn(50, 250))
+                    normalEnd = ColorUtils.setAlphaComponent(slateBase, (45 + glassFactor * 185).toInt().coerceIn(40, 240))
+                    normalStroke = ColorUtils.setAlphaComponent(strokeBase, (120 + glassFactor * 110).toInt().coerceIn(100, 255))
+                    pressStart = ColorUtils.setAlphaComponent(whiteBase, 250)
+                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#E9ECEF"), 240)
+                    pressStroke = Color.WHITE
                 } else if (special) {
-                    val funcBase = if (tintFactor > 0f) ColorUtils.blendARGB(Color.parseColor("#F1F5F9"), Color.parseColor("#94A3B8"), tintFactor * 0.30f) else Color.parseColor("#F1F5F9")
-                    normalStart = ColorUtils.setAlphaComponent(funcBase, ((opFactor * 0.65f + 0.10f) * 255).toInt().coerceIn(25, 230))
-                    normalEnd = ColorUtils.setAlphaComponent(slateBase, ((opFactor * 0.50f + 0.08f) * 255).toInt().coerceIn(20, 220))
-                    normalStroke = ColorUtils.setAlphaComponent(strokeBase, ((opFactor * 0.40f + 0.18f) * 255).toInt().coerceIn(40, 240))
-                    pressStart = ColorUtils.setAlphaComponent(whiteBase, 235)
-                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#E2E8F0"), 220)
-                    pressStroke = strokeBase
+                    normalStart = ColorUtils.setAlphaComponent(Color.parseColor("#E9ECEF"), (35 + glassFactor * 175).toInt().coerceIn(25, 230))
+                    normalEnd = ColorUtils.setAlphaComponent(Color.parseColor("#DEE2E6"), (25 + glassFactor * 180).toInt().coerceIn(20, 220))
+                    normalStroke = ColorUtils.setAlphaComponent(strokeBase, (50 + glassFactor * 80).toInt().coerceIn(40, 200))
+                    pressStart = ColorUtils.setAlphaComponent(Color.parseColor("#F8FAFC"), (55 + glassFactor * 180).toInt().coerceIn(45, 245))
+                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#E9ECEF"), (45 + glassFactor * 185).toInt().coerceIn(35, 235))
+                    pressStroke = ColorUtils.blendARGB(normalStroke, strokeBase, 0.35f)
                 } else {
-                    normalStart = ColorUtils.setAlphaComponent(whiteBase, ((opFactor * 0.80f + 0.15f) * 255).toInt().coerceIn(30, 245))
-                    normalEnd = ColorUtils.setAlphaComponent(slateBase, ((opFactor * 0.60f + 0.10f) * 255).toInt().coerceIn(25, 230))
-                    normalStroke = ColorUtils.setAlphaComponent(strokeBase, ((opFactor * 0.50f + 0.25f) * 255).toInt().coerceIn(50, 250))
-                    pressStart = ColorUtils.setAlphaComponent(whiteBase, ((opFactor * 0.90f + 0.35f) * 255).toInt().coerceIn(60, 255))
-                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#F8FAFC"), ((opFactor * 0.80f + 0.30f) * 255).toInt().coerceIn(55, 255))
-                    pressStroke = strokeBase
+                    normalStart = ColorUtils.setAlphaComponent(whiteBase, (40 + glassFactor * 180).toInt().coerceIn(30, 245))
+                    normalEnd = ColorUtils.setAlphaComponent(slateBase, (30 + glassFactor * 185).toInt().coerceIn(25, 235))
+                    normalStroke = ColorUtils.setAlphaComponent(strokeBase, (60 + glassFactor * 90).toInt().coerceIn(50, 220))
+                    pressStart = ColorUtils.setAlphaComponent(whiteBase, (65 + glassFactor * 180).toInt().coerceIn(55, 250))
+                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#E9ECEF"), (50 + glassFactor * 185).toInt().coerceIn(40, 240))
+                    pressStroke = ColorUtils.blendARGB(normalStroke, strokeBase, 0.25f)
                 }
             } else {
+                // Pure dark sleek dark glass: neutral smoked obsidian, zero blue tint
                 if (isAction) {
-                    normalStart = ColorUtils.setAlphaComponent(Color.parseColor("#334155"), ((opFactor * 0.80f + 0.15f) * 255).toInt().coerceIn(25, 245))
-                    normalEnd = ColorUtils.setAlphaComponent(Color.parseColor("#1E293B"), ((opFactor * 0.65f + 0.10f) * 255).toInt().coerceIn(20, 235))
-                    normalStroke = ColorUtils.setAlphaComponent(Color.parseColor("#94A3B8"), ((opFactor * 0.40f + 0.18f) * 255).toInt().coerceIn(30, 230))
-                    pressStart = ColorUtils.setAlphaComponent(Color.parseColor("#475569"), ((opFactor * 0.90f + 0.30f) * 255).toInt().coerceIn(50, 255))
-                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#334155"), ((opFactor * 0.75f + 0.25f) * 255).toInt().coerceIn(45, 250))
-                    pressStroke = ColorUtils.setAlphaComponent(Color.parseColor("#CBD5E1"), 230)
+                    normalStart = ColorUtils.setAlphaComponent(Color.parseColor("#363642"), (35 + glassFactor * 180).toInt().coerceIn(30, 245))
+                    normalEnd = ColorUtils.setAlphaComponent(Color.parseColor("#1E1E26"), (28 + glassFactor * 190).toInt().coerceIn(25, 235))
+                    normalStroke = ColorUtils.setAlphaComponent(Color.WHITE, (55 + (1f - glassFactor * 0.25f) * 55).toInt().coerceIn(45, 140))
+                    pressStart = ColorUtils.setAlphaComponent(Color.parseColor("#525264"), (70 + glassFactor * 170).toInt().coerceIn(60, 250))
+                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#363644"), (55 + glassFactor * 180).toInt().coerceIn(50, 245))
+                    pressStroke = ColorUtils.setAlphaComponent(Color.WHITE, 160)
                 } else if (special) {
-                    normalStart = ColorUtils.setAlphaComponent(Color.parseColor("#1E293B"), ((opFactor * 0.55f + 0.08f) * 255).toInt().coerceIn(18, 220))
-                    normalEnd = ColorUtils.setAlphaComponent(Color.parseColor("#0F172A"), ((opFactor * 0.45f + 0.06f) * 255).toInt().coerceIn(14, 210))
-                    normalStroke = ColorUtils.setAlphaComponent(Color.parseColor("#64748B"), ((opFactor * 0.30f + 0.12f) * 255).toInt().coerceIn(20, 200))
-                    pressStart = ColorUtils.setAlphaComponent(Color.parseColor("#334155"), ((opFactor * 0.70f + 0.20f) * 255).toInt().coerceIn(35, 240))
-                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#1E293B"), ((opFactor * 0.60f + 0.15f) * 255).toInt().coerceIn(30, 230))
-                    pressStroke = ColorUtils.setAlphaComponent(Color.parseColor("#94A3B8"), ((opFactor * 0.45f + 0.25f) * 255).toInt().coerceIn(40, 240))
+                    normalStart = ColorUtils.setAlphaComponent(Color.parseColor("#1A1A22"), (20 + glassFactor * 170).toInt().coerceIn(16, 225))
+                    normalEnd = ColorUtils.setAlphaComponent(Color.parseColor("#0E0E12"), (16 + glassFactor * 180).toInt().coerceIn(12, 220))
+                    normalStroke = ColorUtils.setAlphaComponent(Color.parseColor("#D4D4D8"), (24 + (1f - glassFactor * 0.35f) * 36).toInt().coerceIn(20, 100))
+                    pressStart = ColorUtils.setAlphaComponent(Color.parseColor("#343440"), (45 + glassFactor * 170).toInt().coerceIn(35, 235))
+                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#22222A"), (35 + glassFactor * 175).toInt().coerceIn(28, 230))
+                    pressStroke = ColorUtils.setAlphaComponent(Color.WHITE, 90)
                 } else {
-                    normalStart = ColorUtils.setAlphaComponent(Color.parseColor("#334155"), ((opFactor * 0.70f + 0.12f) * 255).toInt().coerceIn(20, 240))
-                    normalEnd = ColorUtils.setAlphaComponent(Color.parseColor("#1E293B"), ((opFactor * 0.55f + 0.08f) * 255).toInt().coerceIn(16, 230))
-                    normalStroke = ColorUtils.setAlphaComponent(Color.parseColor("#94A3B8"), ((opFactor * 0.35f + 0.15f) * 255).toInt().coerceIn(25, 220))
-                    pressStart = ColorUtils.setAlphaComponent(Color.parseColor("#475569"), ((opFactor * 0.85f + 0.25f) * 255).toInt().coerceIn(40, 255))
-                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#334155"), ((opFactor * 0.70f + 0.20f) * 255).toInt().coerceIn(35, 250))
-                    pressStroke = ColorUtils.setAlphaComponent(Color.parseColor("#CBD5E1"), ((opFactor * 0.45f + 0.30f) * 255).toInt().coerceIn(50, 255))
+                    normalStart = ColorUtils.setAlphaComponent(Color.parseColor("#26262E"), (25 + glassFactor * 185).toInt().coerceIn(20, 240))
+                    normalEnd = ColorUtils.setAlphaComponent(Color.parseColor("#121216"), (20 + glassFactor * 195).toInt().coerceIn(16, 235))
+                    normalStroke = ColorUtils.setAlphaComponent(Color.WHITE, (30 + (1f - glassFactor * 0.35f) * 45).toInt().coerceIn(25, 120))
+                    pressStart = ColorUtils.setAlphaComponent(Color.parseColor("#444452"), (50 + glassFactor * 180).toInt().coerceIn(40, 245))
+                    pressEnd = ColorUtils.setAlphaComponent(Color.parseColor("#2C2C36"), (40 + glassFactor * 185).toInt().coerceIn(35, 240))
+                    pressStroke = ColorUtils.setAlphaComponent(Color.WHITE, (80 + glassFactor * 80).toInt().coerceIn(70, 200))
                 }
             }
 
@@ -1580,16 +1605,16 @@ object Skins {
             chipDrawable = { d, active ->
                 when {
                     isLucidVoid -> {
-                        val pillRadius = 14f
+                        val pillRadius = 8f
                         val normalCol = if (active) {
-                            if (preset.isLight) Color.parseColor("#33FFFFFF") else Color.parseColor("#3D334155")
+                            if (preset.isLight) Color.parseColor("#4D0F172A") else Color.parseColor("#4D94A3B8")
                         } else {
-                            if (preset.isLight) Color.parseColor("#1FFFFFFF") else Color.parseColor("#240A0D14")
+                            if (preset.isLight) Color.parseColor("#33FFFFFF") else Color.parseColor("#40334155")
                         }
                         val strokeCol = if (active) {
-                            if (preset.isLight) Color.parseColor("#80FFFFFF") else Color.parseColor("#6694A3B8")
+                            if (preset.isLight) Color.parseColor("#990F172A") else Color.parseColor("#99CBD5E1")
                         } else {
-                            if (preset.isLight) Color.parseColor("#4DFFFFFF") else Color.parseColor("#2E94A3B8")
+                            if (preset.isLight) Color.parseColor("#80FFFFFF") else Color.parseColor("#6694A3B8")
                         }
                         val pressedCol = ColorUtils.blendARGB(normalCol, if (preset.isLight) Color.WHITE else Color.BLACK, 0.25f)
                         states(
@@ -1603,8 +1628,8 @@ object Skins {
                         val normal = StudioKeyDrawable(
                             density = d,
                             fillColor = fill,
-                            shape = SHAPE_PILL,
-                            radiusDp = 16f,
+                            shape = SHAPE_ROUNDED,
+                            radiusDp = 8f,
                             strokeWidthDp = 1.0f,
                             strokeColor = edge,
                             shadowDp = 0.5f,
@@ -1618,8 +1643,8 @@ object Skins {
                         val pressed = StudioKeyDrawable(
                             density = d,
                             fillColor = if (active) accentPressed else chipPressed,
-                            shape = SHAPE_PILL,
-                            radiusDp = 16f,
+                            shape = SHAPE_ROUNDED,
+                            radiusDp = 8f,
                             strokeWidthDp = 1.2f,
                             strokeColor = effectiveAccent,
                             shadowDp = 0.2f,
@@ -1636,30 +1661,31 @@ object Skins {
                         val fill = if (active) effectiveAccent else chipCol
                         val edge = if (active) effectiveAccent else chipBorderCol
                         states(
-                            flat(d, fill, 12f, 1.2f, edge),
-                            flat(d, if (active) fill else chipPressed, 12f, 1.2f, effectiveAccent)
+                            flat(d, fill, 8f, 1.2f, edge),
+                            flat(d, if (active) fill else chipPressed, 8f, 1.2f, effectiveAccent)
                         )
                     }
                     style == STYLE_MATERIAL -> {
                         val fill = if (active) effectiveAccent else chipCol
+                        val edge = if (active) effectiveAccent else chipBorderCol
                         states(
-                            flat(d, fill, 12f),
-                            flat(d, if (active) accentPressed else chipPressed, 12f)
+                            flat(d, fill, 8f, 1.0f, edge),
+                            flat(d, if (active) accentPressed else chipPressed, 8f, 1.2f, effectiveAccent)
                         )
                     }
                     style == STYLE_NEUMORPHIC -> {
                         val base = if (active) effectiveAccent else chipCol
                         val edge = if (active) actionEdge else neuEdge
                         states(
-                            raised(d, neuLight(base), neuDark(base), edge, 12f),
-                            raised(d, neuDark(base), neuLight(base), edge, 12f)
+                            raised(d, neuLight(base), neuDark(base), edge, 8f),
+                            raised(d, neuDark(base), neuLight(base), edge, 8f)
                         )
                     }
                     else -> {
                         val fill = if (active) effectiveAccent else chipCol
                         val stroke = if (active) effectiveAccent else chipBorderCol
-                        val normal = flat(d, fill, 18f, 1.0f, stroke)
-                        val pressed = flat(d, fill, 18f, 1.2f, effectiveAccent)
+                        val normal = flat(d, fill, 8f, 1.0f, stroke)
+                        val pressed = flat(d, if (active) accentPressed else chipPressed, 8f, 1.2f, effectiveAccent)
                         states(normal, pressed)
                     }
                 }
@@ -1684,7 +1710,7 @@ object Skins {
             hyperDynamic = hyperDynamic,
             hyperAurora = hyperAurora,
             backgroundDrawable = bgDrawable,
-            blurRadius = lucidBlurRadius,
+            blurRadius = if (isLucidVoid) (glassFactor * 40f) else 0f,
             keyOverrides = keyOverrides,
             perKeyBgProvider = perKeyBackground
         )
@@ -1719,6 +1745,7 @@ object Skins {
         root.put(KEY_GLASS_ENABLED, p.getBoolean(KEY_GLASS_ENABLED, false))
         root.put(KEY_GLASS_OPACITY, prefFloat(p, KEY_GLASS_OPACITY, 0.55f).toDouble())
         root.put(KEY_GLASS_SPECULAR, p.getBoolean(KEY_GLASS_SPECULAR, true))
+        if (p.contains(KEY_LUCID_VOID_TINT)) root.put(KEY_LUCID_VOID_TINT, p.getInt(KEY_LUCID_VOID_TINT, DEFAULT_LUCID_VOID_TINT))
         if (p.contains(KEY_LUCID_VOID_OPACITY)) root.put(KEY_LUCID_VOID_OPACITY, p.getInt(KEY_LUCID_VOID_OPACITY, 48))
         if (p.contains(KEY_LUCID_VOID_BLUR)) root.put(KEY_LUCID_VOID_BLUR, p.getInt(KEY_LUCID_VOID_BLUR, 48))
         if (p.contains(KEY_LUCID_VOID_TINT_LIGHT)) root.put(KEY_LUCID_VOID_TINT_LIGHT, p.getInt(KEY_LUCID_VOID_TINT_LIGHT, DEFAULT_LUCID_VOID_TINT_LIGHT))
@@ -1772,6 +1799,7 @@ object Skins {
                 e.putFloat(KEY_GLASS_OPACITY, (if (op > 1.5f) op / 100f else op).coerceIn(0.15f, 0.95f))
             }
             if (root.has(KEY_GLASS_SPECULAR)) e.putBoolean(KEY_GLASS_SPECULAR, root.getBoolean(KEY_GLASS_SPECULAR))
+            if (root.has(KEY_LUCID_VOID_TINT)) e.putInt(KEY_LUCID_VOID_TINT, root.getInt(KEY_LUCID_VOID_TINT).coerceIn(1, 100))
             if (root.has(KEY_LUCID_VOID_OPACITY)) e.putInt(KEY_LUCID_VOID_OPACITY, root.getInt(KEY_LUCID_VOID_OPACITY).coerceIn(5, 95))
             if (root.has(KEY_LUCID_VOID_BLUR)) e.putInt(KEY_LUCID_VOID_BLUR, root.getInt(KEY_LUCID_VOID_BLUR).coerceIn(0, 100))
             if (root.has(KEY_LUCID_VOID_TINT_LIGHT)) e.putInt(KEY_LUCID_VOID_TINT_LIGHT, root.getInt(KEY_LUCID_VOID_TINT_LIGHT).coerceIn(0, 100))

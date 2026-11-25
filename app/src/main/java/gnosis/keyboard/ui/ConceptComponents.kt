@@ -59,7 +59,7 @@ object ConceptComponents {
     ) {
         val density = view.resources.displayMetrics.density
         view.isClickable = true
-        view.isFocusable = true
+        view.isFocusable = false
 
         val rippleColor = ColorStateList.valueOf(
             ColorUtils.setAlphaComponent(tokens?.accent ?: Color.WHITE, if (tokens?.isLight == true) 28 else 45)
@@ -89,7 +89,7 @@ object ConceptComponents {
     fun createCard(context: Context, tokens: ConceptThemeTokens, density: Float): LinearLayout {
         return LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            val radius = 20f * density
+            val radius = 14f * density
             val strokeW = (tokens.strokeWidthDp * density).toInt().coerceAtLeast(1)
             background = GradientDrawable().apply {
                 cornerRadius = radius
@@ -111,7 +111,7 @@ object ConceptComponents {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             setTypeface(null, Typeface.BOLD)
             setTextColor(tokens.textSecondary)
-            setPadding((6 * density).toInt(), (14 * density).toInt(), (6 * density).toInt(), (8 * density).toInt())
+            setPadding((16 * density).toInt(), (14 * density).toInt(), (16 * density).toInt(), (8 * density).toInt())
         }
     }
 
@@ -147,7 +147,7 @@ object ConceptComponents {
             gravity = Gravity.CENTER_VERTICAL
             setPadding((16 * density).toInt(), (14 * density).toInt(), (16 * density).toInt(), (14 * density).toInt())
             isClickable = true
-            isFocusable = true
+            isFocusable = false
         }
 
         if (iconRes != 0) {
@@ -231,7 +231,7 @@ object ConceptComponents {
             gravity = Gravity.CENTER_VERTICAL
             setPadding((16 * density).toInt(), (14 * density).toInt(), (16 * density).toInt(), (14 * density).toInt())
             isClickable = true
-            isFocusable = true
+            isFocusable = false
         }
 
         if (iconRes != 0) {
@@ -408,7 +408,7 @@ object ConceptComponents {
             gravity = Gravity.CENTER_VERTICAL
             setPadding((4 * density).toInt(), (4 * density).toInt(), (4 * density).toInt(), (4 * density).toInt())
             background = GradientDrawable().apply {
-                cornerRadius = (14 * density)
+                cornerRadius = (10 * density)
                 setColor(tokens.chipBg)
                 setStroke((1 * density).toInt(), tokens.chipBorder)
             }
@@ -416,8 +416,8 @@ object ConceptComponents {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 (42 * density).toInt()
             ).apply {
-                marginStart = (14 * density).toInt()
-                marginEnd = (14 * density).toInt()
+                marginStart = (16 * density).toInt()
+                marginEnd = (16 * density).toInt()
                 bottomMargin = (12 * density).toInt()
             }
         }
@@ -432,21 +432,25 @@ object ConceptComponents {
                 setTypeface(null, if (i == currentIndex) Typeface.BOLD else Typeface.NORMAL)
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
                 isClickable = true
-                isFocusable = true
+                isFocusable = false
             }
 
             fun updateBtnStyle(target: TextView, isSel: Boolean) {
-                target.setTypeface(null, if (isSel) Typeface.BOLD else Typeface.NORMAL)
+                target.setTypeface(null, Typeface.BOLD)
                 if (isSel) {
                     target.setTextColor(if (tokens.isLight) Color.parseColor("#0F172A") else Color.WHITE)
                     target.background = GradientDrawable().apply {
-                        cornerRadius = (11 * density)
+                        cornerRadius = (8 * density)
                         setColor(tokens.surface)
                         setStroke((1 * density).toInt(), tokens.cardBorder)
                     }
                 } else {
                     target.setTextColor(tokens.textSecondary)
-                    target.background = null
+                    target.background = GradientDrawable().apply {
+                        cornerRadius = (8 * density)
+                        setColor(Color.TRANSPARENT)
+                        setStroke((1 * density).toInt(), Color.TRANSPARENT)
+                    }
                 }
             }
 
@@ -475,7 +479,7 @@ object ConceptComponents {
             gravity = Gravity.CENTER_VERTICAL
             setPadding((14 * density).toInt(), (11 * density).toInt(), (14 * density).toInt(), (11 * density).toInt())
             background = GradientDrawable().apply {
-                cornerRadius = (14 * density)
+                cornerRadius = (10 * density)
                 setColor(tokens.chipBg)
                 setStroke((1 * density).toInt(), tokens.chipBorder)
             }
@@ -483,8 +487,10 @@ object ConceptComponents {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
+                marginStart = (16 * density).toInt()
+                marginEnd = (16 * density).toInt()
                 topMargin = (6 * density).toInt()
-                bottomMargin = (16 * density).toInt()
+                bottomMargin = (14 * density).toInt()
             }
 
             if (iconRes != 0) {
@@ -544,13 +550,13 @@ object ConceptComponents {
             if (isAccent) {
                 setTextColor(tokens.onAccentText)
                 background = GradientDrawable().apply {
-                    cornerRadius = (24 * density)
+                    cornerRadius = (12 * density)
                     setColor(tokens.accent)
                 }
             } else {
                 setTextColor(tokens.textPrimary)
                 background = GradientDrawable().apply {
-                    cornerRadius = (24 * density)
+                    cornerRadius = (12 * density)
                     setColor(tokens.chipBg)
                     setStroke((1 * density).toInt(), tokens.cardBorder)
                 }
@@ -1633,6 +1639,13 @@ object ConceptComponents {
             chevron.setImageDrawable(d)
         }
 
+        val liveChangeHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        var pendingSliderVal: Int? = null
+        val liveChangeRunnable = Runnable {
+            pendingSliderVal?.let { onLiveChange(it) }
+            pendingSliderVal = null
+        }
+
         val slider = HyperGlideSliderView(context).apply {
             this.min = min
             this.max = max
@@ -1641,6 +1654,14 @@ object ConceptComponents {
             this.accentColor = tokens.accent
             this.isLightMode = tokens.isLight
             this.onValueChange = { v ->
+                valueBadge.text = valueFormatter?.invoke(v) ?: "$v$suffix"
+                pendingSliderVal = v
+                liveChangeHandler.removeCallbacks(liveChangeRunnable)
+                liveChangeHandler.postDelayed(liveChangeRunnable, 60L)
+            }
+            this.onValueChangeFinished = { v ->
+                liveChangeHandler.removeCallbacks(liveChangeRunnable)
+                pendingSliderVal = null
                 valueBadge.text = valueFormatter?.invoke(v) ?: "$v$suffix"
                 onLiveChange(v)
             }
@@ -1686,6 +1707,8 @@ object ConceptComponents {
         resetBtn.addView(resetTv)
 
         resetBtn.setOnClickListener {
+            liveChangeHandler.removeCallbacks(liveChangeRunnable)
+            pendingSliderVal = null
             if (onReset != null) {
                 onReset()
             } else {
@@ -1801,43 +1824,44 @@ object ConceptComponents {
 
         val chipViews = mutableListOf<TextView>()
         var activeId = selectedId
+        val hPad = dp(12f)
+        val vPad = dp(7f)
+        val rad = dp(8f).toFloat()
+        val strokeW = dp(1f)
+
+        fun applyChipStyle(target: TextView, isSel: Boolean) {
+            target.setTextColor(if (isSel) tokens.onAccentText else tokens.textSecondary)
+            target.setTypeface(null, Typeface.BOLD)
+            target.background = GradientDrawable().apply {
+                cornerRadius = rad
+                if (isSel) {
+                    setColor(tokens.accent)
+                    setStroke(strokeW, tokens.accent)
+                } else {
+                    setColor(tokens.chipBg)
+                    setStroke(strokeW, tokens.cardBorder)
+                }
+            }
+            target.setPadding(hPad, vPad, hPad, vPad)
+        }
 
         for (opt in options) {
             val chip = TextView(context).apply {
                 text = opt.second
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setPadding(dp(12f), dp(7f), dp(12f), dp(7f))
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     marginEnd = dp(6f)
                 }
             }
 
-            fun updateStyle(sel: Boolean) {
-                if (sel) {
-                    chip.setTextColor(tokens.onAccentText)
-                    chip.setTypeface(null, Typeface.BOLD)
-                    chip.background = GradientDrawable().apply {
-                        cornerRadius = dp(14f).toFloat()
-                        setColor(tokens.accent)
-                    }
-                } else {
-                    chip.setTextColor(tokens.textSecondary)
-                    chip.setTypeface(null, Typeface.NORMAL)
-                    chip.background = GradientDrawable().apply {
-                        cornerRadius = dp(14f).toFloat()
-                        setColor(tokens.chipBg)
-                        setStroke(dp(1f), tokens.cardBorder)
-                    }
-                }
-            }
-
-            updateStyle(opt.first == activeId)
+            applyChipStyle(chip, opt.first == activeId)
 
             chip.setOnClickListener {
                 activeId = opt.first
                 options.forEachIndexed { idx, o ->
-                    val isCur = o.first == activeId
-                    if (selChip(idx, isCur, chipViews, tokens, density)) {}
+                    if (idx in chipViews.indices) {
+                        applyChipStyle(chipViews[idx], o.first == activeId)
+                    }
                 }
                 onSelect(opt.first)
             }
@@ -1849,29 +1873,6 @@ object ConceptComponents {
         scroll.addView(chipsRow)
         container.addView(scroll)
         return container
-    }
-
-    private fun selChip(idx: Int, sel: Boolean, views: List<TextView>, tokens: ConceptThemeTokens, density: Float): Boolean {
-        if (idx !in views.indices) return false
-        val c = views[idx]
-        val dpVal = (14f * density).toInt().toFloat()
-        if (sel) {
-            c.setTextColor(tokens.onAccentText)
-            c.setTypeface(null, Typeface.BOLD)
-            c.background = GradientDrawable().apply {
-                cornerRadius = dpVal
-                setColor(tokens.accent)
-            }
-        } else {
-            c.setTextColor(tokens.textSecondary)
-            c.setTypeface(null, Typeface.NORMAL)
-            c.background = GradientDrawable().apply {
-                cornerRadius = dpVal
-                setColor(tokens.chipBg)
-                setStroke((1f * density).toInt(), tokens.cardBorder)
-            }
-        }
-        return true
     }
 
     fun createLivePreviewField(

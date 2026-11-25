@@ -56,7 +56,7 @@ class LetterKeyView(
             setTextColor(secColor)
             typeface = skin.boldTypeface
             includeFontPadding = true
-            setPadding((1.2f * density).toInt(), 0, (1.2f * density).toInt(), 0)
+            setPadding(dp(2f), dp(1.5f), dp(2f), dp(1.5f))
             isClickable = false
             isFocusable = false
 
@@ -95,30 +95,38 @@ class LetterKeyView(
         val hRatio = (hDp / 50f).coerceIn(0.50f, 1.25f)
         val dimRatio = minOf(wRatio, hRatio)
 
-        val basePrimary = if (isDeva) 18.5f else 20.0f
-        val primarySp = (basePrimary * dimRatio * scale).coerceIn(12f, 24f)
-        val secondarySp = (9.5f * dimRatio * scale).coerceIn(6.5f, 11f)
+        val basePrimary = if (isDeva) 18.0f else 19.5f
+        val primarySp = if (hasSec) {
+            (basePrimary * dimRatio * scale * 0.94f).coerceIn(11.5f, 22.0f)
+        } else {
+            (basePrimary * dimRatio * scale).coerceIn(12f, 23.5f)
+        }
+        val secondarySp = (8.4f * dimRatio * scale).coerceIn(7.0f, 10.2f)
 
-        val sFactor = (skin.keyTileSize / 100f)
+        val sFactor = (skin.keyTileSize / 100f).coerceIn(0.70f, 1.30f)
         val vGapFactor = (2f - sFactor).coerceIn(0.15f, 2.2f)
         val spV = (skin.keySpacingV * vGapFactor).coerceAtLeast(0.5f)
 
-        val wFactor = (skin.keyTileWidth / 100f) * sFactor
+        val wFactor = (skin.keyTileWidth / 100f).coerceIn(0.70f, 1.30f) * sFactor
         val hGapFactor = (2f - wFactor).coerceIn(0.15f, 2.2f)
         val spH = (skin.keySpacingH * hGapFactor).coerceAtLeast(0.5f)
 
+        val spHPx = (spH * density).coerceAtLeast(1f * density)
+        val spVPx = (spV * density).coerceAtLeast(1f * density)
+        val cornerRadiusPx = (skin.cornerRadiusDp * density).coerceIn(3f * density, 16f * density)
+
         primaryTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, primarySp)
         if (hasSec) {
-            val topPad = (spV * density * 0.15f + 1.5f * density * dimRatio).toInt()
-            val endPad = (spH * density * 0.15f + 1.2f * density * dimRatio).toInt()
-            primaryTv.setPadding(0, topPad, endPad, 0)
+            val topShift = (spVPx * 0.40f + 2.8f * density * dimRatio).toInt()
+            val endShift = (spHPx * 0.35f + 1.8f * density * dimRatio).toInt()
+            primaryTv.setPadding(0, topShift, endShift, 0)
         } else {
             primaryTv.setPadding(0, 0, 0, 0)
         }
 
         secondaryTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, secondarySp)
-        val topSecMargin = (spV * density + 3.0f * density * dimRatio).toInt().coerceAtLeast((2f * density).toInt())
-        val endSecMargin = (spH * density + 3.5f * density * dimRatio).toInt().coerceAtLeast((2f * density).toInt())
+        val topSecMargin = (spVPx + 2.0f * density + cornerRadiusPx * 0.12f).toInt().coerceAtLeast((2f * density).toInt())
+        val endSecMargin = (spHPx + 3.0f * density + cornerRadiusPx * 0.20f).toInt().coerceAtLeast((3f * density).toInt())
         (secondaryTv.layoutParams as? LayoutParams)?.let { lp ->
             if (lp.topMargin != topSecMargin || lp.marginEnd != endSecMargin) {
                 lp.topMargin = topSecMargin

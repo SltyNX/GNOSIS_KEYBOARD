@@ -193,6 +193,6 @@ class CenterCropDrawable(
 
     override fun setAlpha(alpha: Int) {}
     override fun setColorFilter(colorFilter: ColorFilter?) {}
-    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
     override fun getOpacity() = PixelFormat.OPAQUE
 }
