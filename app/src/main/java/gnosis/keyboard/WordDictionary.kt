@@ -15,13 +15,16 @@ object WordDictionary {
 
     private val userWordFreq = mutableMapOf<String, Int>()
     private val userTransitions = mutableMapOf<String, MutableMap<String, Int>>()
-    private val hinglishWords = LinkedHashSet<String>()
     private var initialized = false
 
-    private class GestureWord(val word: String, val freq: Float)
+    class GestureWord(val word: String, val freq: Float)
 
     @Volatile
     private var gestureBuckets: Map<Char, List<GestureWord>>? = null
+
+    fun getGestureBuckets(): Map<Char, List<GestureWord>>? = gestureBuckets
+    fun getUserFrequencies(): Map<String, Int> = userWordFreq
+    fun getCommonWordList(): List<String> = commonWords
 
     fun setGestureVocabulary(words: List<String>) {
         val n = words.size.coerceAtLeast(1).toFloat()
@@ -44,10 +47,14 @@ object WordDictionary {
         "can" to listOf("can", "can't"),
         "wont" to listOf("won't"),
         "im" to listOf("I'm"),
+        "iam" to listOf("I'm"),
         "ive" to listOf("I've"),
         "ill" to listOf("I'll", "ill"),
         "id" to listOf("I'd"),
         "theyre" to listOf("they're", "there", "their"),
+        "theyare" to listOf("they're"),
+        "youare" to listOf("you're"),
+        "weare" to listOf("we're"),
         "were" to listOf("we're", "were"),
         "thats" to listOf("that's", "that"),
         "that" to listOf("that's", "that"),
@@ -175,13 +182,12 @@ object WordDictionary {
                 userTransitions[key] = nextMap
             }
         }
-        try {
-            if (HinglishDictionaryManager.isEnabled(ctx)) {
-                hinglishWords.addAll(HinglishDictionaryManager.loadWords(ctx))
-            }
-            hinglishWords.addAll(DictionaryExtensionManager.loadAllActiveWords(ctx))
-        } catch (_: Exception) {}
         initialized = true
+        try {
+            Thread {
+                getCommonWords(ctx)
+            }.start()
+        } catch (_: Throwable) {}
     }
 
     fun learn(ctx: Context, word: String) {
@@ -232,6 +238,90 @@ object WordDictionary {
             .apply()
     }
 
+    @Volatile
+    private var assetDictionaryWords: Set<String>? = null
+
+    fun reload(context: Context? = null) {
+        assetDictionaryWords = null
+        if (context != null) {
+            getCommonWords(context)
+        }
+    }
+
+    fun getCommonWords(context: Context? = null): Set<String> {
+        val cached = assetDictionaryWords
+        if (cached != null) return cached
+
+        val combined = HashSet<String>(commonWords)
+        if (context != null) {
+            try {
+                context.assets.open("words_en.txt").bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        val w = line.trim().lowercase(Locale.ROOT)
+                        if (w.isNotEmpty()) combined.add(w)
+                    }
+                }
+            } catch (_: Exception) {
+                try {
+                    context.assets.open("words/words(10000).txt").bufferedReader().useLines { lines ->
+                        for (line in lines) {
+                            val w = line.trim().lowercase(Locale.ROOT)
+                            if (w.isNotEmpty()) combined.add(w)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            try {
+                context.assets.open("words_hinglish.txt").bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        val w = line.trim().lowercase(Locale.ROOT)
+                        if (w.isNotEmpty()) combined.add(w)
+                    }
+                }
+            } catch (_: Exception) {}
+
+            // Words loaded from asset dictionary
+        }
+        assetDictionaryWords = combined
+        wordsByLengthCache = combined.groupBy { it.length }
+        setGestureVocabulary(combined.toList())
+        try {
+            Thread {
+                gnosis.keyboard.engine.suggestion_typing.GnosisRadixFstEngine.instance.build(combined)
+            }.start()
+        } catch (_: Throwable) {}
+        return combined
+    }
+
+    @Volatile
+    private var wordsByLengthCache: Map<Int, List<String>>? = null
+
+    fun getCandidateWordsByLength(targetLength: Int): List<String> {
+        var cache = wordsByLengthCache
+        if (cache == null) {
+            val vocab = getCommonWords()
+            cache = vocab.groupBy { it.length }
+            wordsByLengthCache = cache
+        }
+        val res = ArrayList<String>()
+        cache[targetLength - 1]?.let { res.addAll(it) }
+        cache[targetLength]?.let { res.addAll(it) }
+        cache[targetLength + 1]?.let { res.addAll(it) }
+        return res
+    }
+
+    private val commonWordsSet by lazy { commonWords.toSet() }
+
+    fun isCommonWord(word: String): Boolean {
+        val lower = word.lowercase(Locale.ROOT)
+        return assetDictionaryWords?.contains(lower) ?: commonWordsSet.contains(lower)
+    }
+
+    fun getVocab(): Set<String> {
+        return assetDictionaryWords ?: commonWordsSet
+    }
+
     fun getSuggestions(prefix: String, limit: Int = 3): List<String> {
         if (prefix.isEmpty()) return emptyList()
 
@@ -241,8 +331,10 @@ object WordDictionary {
         val isAllCaps = prefix.length > 1 && prefix.all { it.isUpperCase() }
 
         val candidateMatches = LinkedHashSet<String>()
+        val vocab = getVocab()
 
-        if (commonWords.contains(rawLower) || userWordFreq.containsKey(rawLower) || hinglishWords.contains(rawLower)) {
+        val isKnown = vocab.contains(rawLower) || (userWordFreq[rawLower] ?: 0) >= 3
+        if (isKnown) {
             candidateMatches.add(formatCasing(rawLower, isFirstCapital, isAllCaps))
         }
 
@@ -250,7 +342,10 @@ object WordDictionary {
             list.forEach { candidateMatches.add(formatCasing(it, isFirstCapital, isAllCaps)) }
         }
 
-        val learnedRanked = userWordFreq.entries.sortedByDescending { it.value }.map { it.key }
+        val learnedRanked = userWordFreq.entries
+            .filter { it.value >= 3 || vocab.contains(it.key) }
+            .sortedByDescending { it.value }
+            .map { it.key }
         for (w in learnedRanked) {
             if (candidateMatches.size >= 8) break
             if (w.startsWith(rawLower) || w.replace("'", "").startsWith(cleanLower)) {
@@ -258,25 +353,15 @@ object WordDictionary {
             }
         }
 
-        for (w in commonWords) {
+        for (w in vocab) {
             if (candidateMatches.size >= 8) break
             if (w.startsWith(rawLower) || w.replace("'", "").startsWith(cleanLower)) {
                 candidateMatches.add(formatCasing(w, isFirstCapital, isAllCaps))
             }
         }
 
-        if (candidateMatches.size < 8 && hinglishWords.isNotEmpty()) {
-            for (w in hinglishWords) {
-                if (candidateMatches.size >= 8) break
-                if (w.startsWith(rawLower) || w.replace("'", "").startsWith(cleanLower)) {
-                    candidateMatches.add(formatCasing(w, isFirstCapital, isAllCaps))
-                }
-            }
-        }
-
         if (rawLower.length >= 3 && candidateMatches.size < limit) {
             val fuzzyMatches = mutableListOf<Pair<String, Int>>()
-            val vocab = if (hinglishWords.isNotEmpty()) commonWords + hinglishWords.take(500) else commonWords
             for (w in vocab) {
                 if (w.isNotEmpty() && w[0] == rawLower[0]) {
                     val dist = editDistance(rawLower, w)
@@ -326,44 +411,7 @@ object WordDictionary {
         keyBounds: Map<Char, RectF>,
         limit: Int = 3
     ): List<String> {
-        if (points.size < 4 || keyBounds.isEmpty()) return emptyList()
-
-        val pStart = points.first()
-        val pEnd = points.last()
-
-        val startChar = findNearestKey(pStart, keyBounds) ?: return emptyList()
-        val endChar = findNearestKey(pEnd, keyBounds) ?: return emptyList()
-
-        val startCandidates = setOf(startChar) + findAdjacentKeys(startChar)
-        val endCandidates = setOf(endChar) + findAdjacentKeys(endChar)
-
-        val visitedKeys = extractVisitedKeys(points, keyBounds)
-        val scoredWords = mutableListOf<Pair<String, Float>>()
-        val seen = HashSet<String>()
-        fun consider(word: String, dictFreq: Float) {
-            if (word.length < 2 || !seen.add(word)) return
-            val first = word.first()
-            val last = word.last()
-            if (!startCandidates.contains(first) || !endCandidates.contains(last)) return
-            if (!matchesSequence(word, visitedKeys)) return
-
-            val distScore = computeSpatialDistance(word, points, keyBounds)
-            val baseFreq = userWordFreq[word]?.toFloat() ?: dictFreq
-            val startBonus = if (first == startChar) 2.0f else 1.0f
-            val endBonus = if (last == endChar) 2.0f else 1.0f
-            scoredWords.add(word to (baseFreq * startBonus * endBonus) / (1.0f + (distScore / 40.0f)))
-        }
-
-        for (w in userWordFreq.keys) consider(w, 1f)
-        val buckets = gestureBuckets
-        if (buckets != null) {
-            for (c in startCandidates) buckets[c]?.forEach { consider(it.word, it.freq) }
-        } else {
-            for (w in commonWords) consider(w, 20f)
-        }
-
-        scoredWords.sortByDescending { it.second }
-        return scoredWords.take(limit).map { it.first }
+        return gnosis.keyboard.engine.glide.GnosisGlideEngine.matchGesture(points, keyBounds, limit)
     }
 
     private fun findNearestKey(point: PointF, keyBounds: Map<Char, RectF>): Char? {

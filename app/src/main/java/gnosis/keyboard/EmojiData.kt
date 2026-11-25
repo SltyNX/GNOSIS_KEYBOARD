@@ -16,7 +16,9 @@ object EmojiData {
         "Travel",
         "Objects",
         "Symbols",
-        "Flags"
+        "Flags",
+        "Kaomoji",
+        "Combos"
     )
 
     val categoryIcons = listOf(
@@ -29,7 +31,9 @@ object EmojiData {
         R.drawable.ic_car,
         R.drawable.ic_lightbulb,
         R.drawable.ic_heart,
-        R.drawable.ic_flag
+        R.drawable.ic_flag,
+        R.drawable.ic_sticker,
+        R.drawable.ic_sparkles
     )
 
     val categories = listOf(
@@ -41,7 +45,9 @@ object EmojiData {
         "Travel & Places",
         "Objects & Clothing",
         "Symbols & Signs",
-        "Flags"
+        "Flags",
+        "Kaomoji & Emoticons",
+        "Emoji Combos & Art"
     )
 
     val sets: List<List<String>> = listOf(
@@ -147,19 +153,10 @@ object EmojiData {
     )
 
     @Volatile
-    private var cachedSupportedSets: List<List<String>>? = null
+    private var cachedSupportedSets: List<List<String>> = sets
 
     fun getSupportedSet(index: Int): List<String> {
-        val all = cachedSupportedSets ?: synchronized(this) {
-            cachedSupportedSets ?: run {
-                val paint = Paint()
-                sets.map { list ->
-                    val filtered = list.filter { emoji -> isEmojiRenderable(paint, emoji) }
-                    filtered.ifEmpty { list }
-                }.also { cachedSupportedSets = it }
-            }
-        }
-        return all.getOrNull(index) ?: emptyList()
+        return cachedSupportedSets.getOrNull(index) ?: sets.getOrNull(index) ?: emptyList()
     }
 
     private fun isEmojiRenderable(paint: Paint, emoji: String): Boolean {

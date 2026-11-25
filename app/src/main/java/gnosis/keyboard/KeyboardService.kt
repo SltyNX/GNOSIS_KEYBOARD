@@ -40,20 +40,26 @@ import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import java.util.Locale
+import android.view.Window
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.CheckBox
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.HorizontalScrollView
@@ -66,23 +72,22 @@ import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import gnosis.keyboard.emoji.EmojiSuggestionEngine
-import gnosis.keyboard.engine.spell.ContractionEngine
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import gnosis.keyboard.dictionary.UserDictionaryRepository
-import gnosis.keyboard.engine.Candidate
-import gnosis.keyboard.engine.CandidateKind
-import gnosis.keyboard.engine.EngineFactory
-import gnosis.keyboard.engine.TypingEngine
+import gnosis.keyboard.engine.GnosisEngine
+import gnosis.keyboard.engine.suggestion_typing.OnlineSuggestionEngine
+import gnosis.keyboard.engine.grammar.GnosisSentenceExplorer
+import gnosis.keyboard.engine.contractions.GnosisContractionEngine
+import gnosis.keyboard.engine.suggestion_typing.textboard.CandidateItem
+import gnosis.keyboard.engine.suggestion_typing.textboard.CandidateType
+import gnosis.keyboard.engine.grammar_and_spellcheck.writingassist.GnosisGrammarIssue
 import gnosis.keyboard.engine.voice.AgenticVoiceCommander
 import gnosis.keyboard.engine.voice.VoiceCommand
 import gnosis.keyboard.emoji.EmojiKitchenEngine
 import gnosis.keyboard.engine.security.MessageArmourEngine
 import gnosis.keyboard.engine.language.GnosisLanguageManager
-import gnosis.keyboard.engine.vector.GnosisNeuralVectorEngine
 import gnosis.keyboard.ime.EditorConnectionController
-import gnosis.keyboard.text.AutocorrectEngine
-import gnosis.keyboard.text.SuggestionEngine
 import gnosis.keyboard.ui.KeyboardResizeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -197,7 +202,10 @@ class KeyboardService : InputMethodService() {
         )
     }
 
-    private val handler = Handler(Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private inline val handler: Handler get() = mainHandler
+    private val altCandidatesCache = mutableMapOf<Char, List<String>>()
+    private var statsLoggingEnabled = true
     private var lastSelStart = -1
     private val letterViews = mutableListOf<View>()
     private val keyBoundingBoxes = mutableMapOf<Char, RectF>()
@@ -220,11 +228,18 @@ class KeyboardService : InputMethodService() {
     private var toolbarClipBtn: View? = null
     private var toolbarEditBtn: View? = null
     private var toolbarFloatBtn: View? = null
+    private var toolbarFontBtn: View? = null
 
     private var toolboxMicBtn: View? = null
     private var toolboxClipBtn: View? = null
     private var toolboxEditBtn: View? = null
     private var toolboxFloatBtn: View? = null
+    private var toolboxFontBtn: View? = null
+
+    private var particleOverlay: ParticleEffectView? = null
+    private var particleStyle: ParticleEffectView.Style = ParticleEffectView.Style.OFF
+    private var activeCoolFont: CoolFontEngine.FontStyle = CoolFontEngine.FontStyle.NORMAL
+    private var activeCoolFontPopup: PopupWindow? = null
 
     private var clipOptionsPopup: PopupWindow? = null
     private var clipOptionsDismissTime = 0L
@@ -232,6 +247,9 @@ class KeyboardService : InputMethodService() {
     private var layoutStyle = Skins.STYLE_REVAMPED
     var longPressMs: Long = Skins.DEFAULT_LONG_PRESS_MS.toLong()
     var secondaryHintsEnabled: Boolean = Skins.DEFAULT_SECONDARY_HINTS
+    private var onlineQueryRunnable: Runnable? = null
+    private var lastQueriedOnlineKey: String = ""
+    private var cachedOnlineWords: List<String> = emptyList()
     private var cachedEmojiPanel: View? = null
     private val prewarmEmojiRunnable = Runnable {
         if (isInputViewShown && cachedEmojiPanel == null) {
@@ -245,6 +263,13 @@ class KeyboardService : InputMethodService() {
             isSkinDirty = true
             if (lightUpdate) {
                 loadPreferences(forceRebuildSkin = true)
+                if (::rootLayout.isInitialized) {
+                    rootLayout.accentColor = skin.accent
+                    renderFullKeyboard()
+                    applyHostMode()
+                    applyWindowBlurAndStyles()
+                }
+                refreshSuggestionsNow()
             } else {
                 restartKeyboard()
             }
@@ -275,7 +300,6 @@ class KeyboardService : InputMethodService() {
     private var voiceRetriedDefaultLang = false
 
     private lateinit var editorController: EditorConnectionController
-    private val autocorrectEngine = AutocorrectEngine()
     private val statsRepository by lazy { TypingStatisticsRepository.getInstance(this) }
     private var pendingRolloverCommit: (() -> Unit)? = null
 
@@ -285,7 +309,6 @@ class KeyboardService : InputMethodService() {
         pending?.invoke()
     }
     private lateinit var userDictionary: UserDictionaryRepository
-    private var suggestionEngine: SuggestionEngine? = null
 
     private var predictionsEnabled = true
     private var emojiSuggestionsEnabled = true
@@ -355,26 +378,17 @@ class KeyboardService : InputMethodService() {
     private var gestureDeleteEnabled = true
     private var cursorControlEnabled = true
     private var suggestionsEnabled = true
-    private var autoCorrectEnabled = true
+    private var autoCorrectEnabled = false
     private var grammarCheckEnabled = true
-    private var currentAutoCorrectCandidate: Candidate? = null
-    private var typingEngine: TypingEngine? = null
-    private fun getTypingEngine(): TypingEngine? {
-        typingEngine?.let { return it }
-        val effectiveLang = GnosisLanguageManager.resolveEffectiveLanguage(this)
-        return try {
-            EngineFactory.create(this, effectiveLang.code).also { typingEngine = it }
-        } catch (e: Throwable) {
-            android.util.Log.e("KeyboardService", "Failed to initialize typing engine", e)
-            null
-        }
-    }
+    private var currentAutoCorrectCandidate: CandidateItem? = null
+    private val dismissedGrammarIssues = HashSet<String>()
     private var currentLayoutName = "qwerty"
 
     private var sounds: KeySounds? = null
     private val currentWord = StringBuilder()
     private var lastCommittedWord = ""
     private var isNewInputSession = true
+    private var hasTypedInCurrentSession = false
 
     private var activePopup: PopupWindow? = null
     private var activePreviewPopup: PopupWindow? = null
@@ -391,8 +405,36 @@ class KeyboardService : InputMethodService() {
     private var currentEmojiCategoryIndex = 0
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        when (key) {
+            Skins.KEY_AUTOCORRECT, Skins.KEY_PREDICTIONS, Skins.KEY_GRAMMAR,
+            Skins.KEY_SUGGESTIONS, Skins.KEY_EMOJI_SUGGESTIONS -> {
+                loadPreferences(forceRebuildSkin = false)
+                refreshSuggestionsNow()
+                return@OnSharedPreferenceChangeListener
+            }
+        }
         if (key == Skins.KEY_LONG_PRESS_MS) {
             longPressMs = Skins.prefs(this).getInt(Skins.KEY_LONG_PRESS_MS, Skins.DEFAULT_LONG_PRESS_MS).toLong().coerceIn(50L, 500L)
+            return@OnSharedPreferenceChangeListener
+        }
+        if (key == Skins.KEY_SOUND || key == Skins.KEY_SOUND_TONE || key == Skins.KEY_SOUND_VOLUME) {
+            val p = Skins.prefs(this)
+            soundEnabled = p.getBoolean(Skins.KEY_SOUND, false)
+            val vol = try {
+                p.getInt(Skins.KEY_SOUND_VOLUME, 80) / 100f
+            } catch (_: Exception) {
+                try { p.getFloat(Skins.KEY_SOUND_VOLUME, 0.8f) } catch (_: Exception) { 0.8f }
+            }
+            soundVolume = vol.coerceIn(0.01f, 1.0f)
+            soundTone = p.getString(Skins.KEY_SOUND_TONE, "default") ?: "default"
+            if (sounds == null) {
+                try { sounds = KeySounds(this) } catch (_: Exception) {}
+            }
+            return@OnSharedPreferenceChangeListener
+        }
+        if (key == Skins.KEY_REVAMPED_TOOLBAR_ICON_SIZE || key == Skins.KEY_CLASSIC_TOOLBAR_ICON_SIZE ||
+            key == Skins.KEY_TOOLBAR_HEIGHT_REVAMPED || key == Skins.KEY_TOOLBAR_HEIGHT_CLASSIC) {
+            renderFullKeyboard()
             return@OnSharedPreferenceChangeListener
         }
         if (key == Skins.KEY_THEME || key == Skins.KEY_THEME_MODE || key == Skins.KEY_ACCENT || key == Skins.KEY_KEY_STYLE
@@ -404,8 +446,8 @@ class KeyboardService : InputMethodService() {
             cachedEmojiPanel = null
             isSkinDirty = true
         }
-        handler.removeCallbacks(refreshRunnable)
-        handler.postDelayed(refreshRunnable, 40L)
+        mainHandler.removeCallbacks(refreshRunnable)
+        mainHandler.post(refreshRunnable)
     }
 
     private val clipChangedListener = ClipboardManager.OnPrimaryClipChangedListener {
@@ -421,6 +463,8 @@ class KeyboardService : InputMethodService() {
         renderFullKeyboard()
         updateAutoCaps()
         applyHostMode()
+        applyWindowBlurAndStyles()
+        refreshSuggestionsNow()
     }
 
     override fun onCreate() {
@@ -436,19 +480,10 @@ class KeyboardService : InputMethodService() {
         editorController = EditorConnectionController(this)
         userDictionary = UserDictionaryRepository(this)
         WordDictionary.init(this)
-        ContractionEngine.init(this)
+        GnosisEngine.init(this)
         EmojiSuggestionEngine.init(this)
-        val appCtx = applicationContext
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                val engine = EngineFactory.create(appCtx)
-                withContext(Dispatchers.Main) {
-                    if (typingEngine == null) typingEngine = engine
-                }
-            } catch (e: Throwable) {
-                android.util.Log.e("KeyboardService", "Async engine preload failed", e)
-            }
-        }
+        KaomojiData.prewarm(this)
+        handler.postDelayed(prewarmEmojiRunnable, 200L)
         ClipboardHistory.init(this)
         ClipboardHistory.syncFromSystem(this)
         try {
@@ -506,9 +541,7 @@ class KeyboardService : InputMethodService() {
         clipPanel = null
         dismissAllPopups()
         isSkinDirty = true
-        EngineFactory.invalidateCache()
-        SuggestionExtensionManager.invalidateCache()
-        suggestionEngine = null
+        GnosisEngine.reset()
         loadPreferences(forceRebuildSkin = true)
         ScreenshotWatcher.sync(this, scanNow = false)
         if (::rootLayout.isInitialized) {
@@ -592,8 +625,17 @@ class KeyboardService : InputMethodService() {
         super.onFinishInputView(finishingInput)
     }
 
+    override fun onConfigureWindow(win: Window, isFullscreen: Boolean, isCandidatesOnly: Boolean) {
+        super.onConfigureWindow(win, isFullscreen, isCandidatesOnly)
+        try {
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(win, false)
+        } catch (_: Throwable) {}
+        applyWindowBlurAndStyles()
+    }
+
     override fun onWindowShown() {
         super.onWindowShown()
+        applyWindowBlurAndStyles()
         ClipboardHistory.syncFromSystem(this)
         ScreenshotWatcher.sync(this)
         refreshSuggestionsNow()
@@ -630,28 +672,38 @@ class KeyboardService : InputMethodService() {
 
     override fun onComputeInsets(outInsets: Insets) {
         super.onComputeInsets(outInsets)
-        if (!floatActive()) return
-        val decorH = window.window?.decorView?.height ?: return
-        if (decorH <= 0) return
-        outInsets.contentTopInsets = decorH
-        outInsets.visibleTopInsets = decorH
-        outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_REGION
-        if (activeSwitcherOverlay != null || isResizingCorner || isMovingFloating) {
-            outInsets.touchableRegion.set(0, 0, screenW(), decorH)
-            return
-        }
-        if (::rootLayout.isInitialized && rootLayout.parent != null && rootLayout.width > 0) {
-            val loc = IntArray(2)
-            rootLayout.getLocationInWindow(loc)
-            val pad = dp(48f)
-            outInsets.touchableRegion.set(
-                (loc[0] - pad).coerceAtLeast(0),
-                (loc[1] - pad).coerceAtLeast(0),
-                (loc[0] + rootLayout.width + pad).coerceAtMost(screenW()),
-                (loc[1] + rootLayout.height + pad).coerceAtMost(decorH)
-            )
+        if (floatActive()) {
+            val decorH = window.window?.decorView?.height ?: return
+            if (decorH <= 0) return
+            outInsets.contentTopInsets = decorH
+            outInsets.visibleTopInsets = decorH
+            outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_REGION
+            if (activeSwitcherOverlay != null || isResizingCorner || isMovingFloating) {
+                outInsets.touchableRegion.set(0, 0, screenW(), decorH)
+                return
+            }
+            if (::rootLayout.isInitialized && rootLayout.parent != null && rootLayout.width > 0) {
+                val loc = IntArray(2)
+                rootLayout.getLocationInWindow(loc)
+                val pad = dp(48f)
+                outInsets.touchableRegion.set(
+                    (loc[0] - pad).coerceAtLeast(0),
+                    (loc[1] - pad).coerceAtLeast(0),
+                    (loc[0] + rootLayout.width + pad).coerceAtMost(screenW()),
+                    (loc[1] + rootLayout.height + pad).coerceAtMost(decorH)
+                )
+            } else {
+                outInsets.touchableRegion.setEmpty()
+            }
         } else {
-            outInsets.touchableRegion.setEmpty()
+            // Normal keyboard mode: Insets must strictly align with the top of the visible keyboard root
+            if (::rootLayout.isInitialized && rootLayout.parent != null && rootLayout.height > 0) {
+                val loc = IntArray(2)
+                rootLayout.getLocationInWindow(loc)
+                val top = loc[1].coerceAtLeast(0)
+                outInsets.contentTopInsets = top
+                outInsets.visibleTopInsets = top
+            }
         }
     }
 
@@ -703,7 +755,13 @@ class KeyboardService : InputMethodService() {
         val extraBottom = if (floatActive() || !::skin.isInitialized) 0 else dp(skin.bottomPaddingDp)
         val userResizeBottom = if (floatActive() || !::resizeManager.isInitialized) 0 else dp(resizeManager.bottomPadDp.toFloat())
         val bottom = (if (floatActive()) 0 else navBarBottomInset) + extraBottom + userResizeBottom
-        if (host.paddingBottom != bottom) host.setPadding(0, 0, 0, bottom)
+        if (host.paddingBottom != bottom) {
+            host.setPadding(0, 0, 0, bottom)
+        }
+        val isLucidVoid = if (::skin.isInitialized) (skin.id == "lucid-void" || skin.id == "lucid-void_light") else false
+        val navColor = resolveEffectiveNavBarColor()
+        host.setBackgroundColor(if (floatActive() || isLucidVoid) Color.TRANSPARENT else navColor)
+        host.invalidate()
     }
 
     override fun onUpdateSelection(
@@ -719,26 +777,64 @@ class KeyboardService : InputMethodService() {
             currentWord.clear()
             currentAutoCorrectCandidate = null
         }
+        val ic = currentInputConnection
+        val before = ic?.getTextBeforeCursor(40, 0)?.toString() ?: ""
+        if (currentWord.isEmpty() && before.trim().isEmpty()) {
+            hasTypedInCurrentSession = false
+        }
         updateAutoCaps()
         updateSuggestions()
     }
 
-    private fun applyWindowBlurAndStyles() {
-        if (!::skin.isInitialized) return
+    private fun resolveEffectiveNavBarColor(): Int {
+        if (!::skin.isInitialized) return Color.parseColor("#121318")
         val isLucidVoid = skin.id == "lucid-void" || skin.id == "lucid-void_light"
-        val isGlass = skin.glassEnabled || isLucidVoid
+        return if (isLucidVoid) {
+            if (skin.isLight) Color.parseColor("#EBECEF") else Color.parseColor("#121318")
+        } else {
+            if (Color.alpha(skin.background) < 255) {
+                val base = if (skin.isLight) Color.parseColor("#EBECEF") else Color.parseColor("#121318")
+                ColorUtils.compositeColors(skin.background, base)
+            } else {
+                skin.background
+            }
+        }
+    }
+
+    private fun applyWindowBlurAndStyles() {
+        if (!::skin.isInitialized) {
+            skin = Skins.buildSkin(this)
+        }
         val win = window?.window ?: return
         try {
-            if (isGlass) {
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(win, false)
+            val isLucidVoid = skin.id == "lucid-void" || skin.id == "lucid-void_light"
+            val isTranslucent = floatActive() || isLucidVoid
+            val navColor = resolveEffectiveNavBarColor()
+            if (isTranslucent) {
                 win.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-                    @Suppress("DEPRECATION")
-                    win.navigationBarColor = Color.TRANSPARENT
+                try { win.decorView.setBackgroundColor(Color.TRANSPARENT) } catch (_: Throwable) {}
+                @Suppress("DEPRECATION")
+                win.navigationBarColor = Color.TRANSPARENT
+            } else {
+                win.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+                win.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION)
+                win.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(navColor))
+                try { win.decorView.setBackgroundColor(navColor) } catch (_: Throwable) {}
+                @Suppress("DEPRECATION")
+                win.navigationBarColor = navColor
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    win.navigationBarDividerColor = Color.TRANSPARENT
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     win.isNavigationBarContrastEnforced = false
                 }
+                try {
+                    val insetsCtrl = androidx.core.view.WindowCompat.getInsetsController(win, win.decorView)
+                    insetsCtrl?.isAppearanceLightNavigationBars = skin.isLight
+                } catch (_: Throwable) {}
             }
+            imeHost?.setBackgroundColor(if (isTranslucent) Color.TRANSPARENT else navColor)
         } catch (_: Throwable) {}
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
@@ -762,21 +858,34 @@ class KeyboardService : InputMethodService() {
         val useLandscapeProfile = isLandscape && p.getBoolean(Skins.KEY_LANDSCAPE_SEPARATE, false)
         landscapeSplit = isLandscape && p.getBoolean(Skins.KEY_LANDSCAPE_SPLIT, false)
 
+        val isClassic = (layoutStyle == Skins.STYLE_CLASSICS)
         KEY_HEIGHT_DP = if (useLandscapeProfile) {
             Skins.prefInt(p, Skins.KEY_HEIGHT_LANDSCAPE, 36).coerceIn(28, 54)
         } else if (isLandscape) {
             36
+        } else if (isClassic) {
+            Skins.prefInt(p, Skins.KEY_KEYBOARD_HEIGHT_CLASSIC, Skins.DEFAULT_KEYBOARD_HEIGHT_CLASSIC).coerceIn(36, 68)
         } else {
             Skins.prefInt(p, Skins.KEY_KEYBOARD_HEIGHT, 48).coerceIn(36, 68)
         }
+        statsLoggingEnabled = p.getBoolean(TypingStatisticsRepository.PREF_STATS_ENABLED, true)
+        altCandidatesCache.clear()
         numberRowEnabled = p.getBoolean(Skins.KEY_NUMBER_ROW, false)
         keyPopupEnabled = p.getBoolean(Skins.KEY_KEY_POPUP, false)
         longPressMs = p.getInt(Skins.KEY_LONG_PRESS_MS, Skins.DEFAULT_LONG_PRESS_MS).toLong().coerceIn(50L, 500L)
         secondaryHintsEnabled = p.getBoolean(Skins.KEY_SECONDARY_HINTS, Skins.DEFAULT_SECONDARY_HINTS)
         if (!keyPopupEnabled) dismissPreview()
         soundEnabled = p.getBoolean(Skins.KEY_SOUND, false)
-        soundVolume = p.getFloat(Skins.KEY_SOUND_VOLUME, 0.8f)
+        val vol = try {
+            p.getInt(Skins.KEY_SOUND_VOLUME, 80) / 100f
+        } catch (_: Exception) {
+            try { p.getFloat(Skins.KEY_SOUND_VOLUME, 0.8f) } catch (_: Exception) { 0.8f }
+        }
+        soundVolume = vol.coerceIn(0.01f, 1.0f)
         soundTone = p.getString(Skins.KEY_SOUND_TONE, "default") ?: "default"
+        if (soundEnabled && sounds == null) {
+            try { sounds = KeySounds(this) } catch (_: Exception) {}
+        }
         hapticEnabled = p.getBoolean(Skins.KEY_HAPTIC, false)
         hapticPressure = p.getInt(Skins.KEY_HAPTIC_PRESSURE, 50)
         oneHandedMode = p.getString(Skins.KEY_ONE_HANDED, "off") ?: "off"
@@ -784,11 +893,12 @@ class KeyboardService : InputMethodService() {
         gestureDeleteEnabled = p.getBoolean(Skins.KEY_GESTURE_DELETE, true)
         cursorControlEnabled = p.getBoolean(Skins.KEY_CURSOR_CONTROL, true)
         suggestionsEnabled = p.getBoolean(Skins.KEY_SUGGESTIONS, true)
-        autoCorrectEnabled = p.getBoolean(Skins.KEY_AUTOCORRECT, true)
+        autoCorrectEnabled = p.getBoolean(Skins.KEY_AUTOCORRECT, Skins.DEFAULT_AUTOCORRECT)
         predictionsEnabled = p.getBoolean(Skins.KEY_PREDICTIONS, true)
         emojiSuggestionsEnabled = p.getBoolean(Skins.KEY_EMOJI_SUGGESTIONS, true)
         doubleSpacePeriodEnabled = p.getBoolean(Skins.KEY_DOUBLE_SPACE_PERIOD, true)
         grammarCheckEnabled = p.getBoolean(Skins.KEY_GRAMMAR, true)
+        android.util.Log.i("GnosisTestSession", "[SETTINGS] AutoCorrect=$autoCorrectEnabled | Predictions=$predictionsEnabled | Grammar=$grammarCheckEnabled | Suggestions=$suggestionsEnabled")
         currentLayoutName = if (useLandscapeProfile) {
             p.getString(Skins.KEY_LAYOUT_LANDSCAPE, "qwerty") ?: "qwerty"
         } else {
@@ -809,6 +919,15 @@ class KeyboardService : InputMethodService() {
             isSkinDirty = false
             lastSkinOrientation = curOrient
         }
+        val partStr = p.getString(Skins.KEY_PARTICLE_EFFECTS, Skins.DEFAULT_PARTICLE_EFFECTS) ?: Skins.DEFAULT_PARTICLE_EFFECTS
+        particleStyle = ParticleEffectView.Style.values().firstOrNull { it.id == partStr } ?: ParticleEffectView.Style.OFF
+        particleOverlay?.effectStyle = particleStyle
+        if (::skin.isInitialized) {
+            particleOverlay?.primaryColor = skin.accent
+            particleOverlay?.secondaryColor = skin.textColor
+        }
+        val fontStr = p.getString(Skins.KEY_COOL_FONT, Skins.DEFAULT_COOL_FONT) ?: Skins.DEFAULT_COOL_FONT
+        activeCoolFont = CoolFontEngine.FontStyle.values().firstOrNull { it.id == fontStr } ?: CoolFontEngine.FontStyle.NORMAL
         applyHostBottomPadding()
         applyWindowBlurAndStyles()
     }
@@ -819,7 +938,54 @@ class KeyboardService : InputMethodService() {
         lastOrientation = resources.configuration.orientation
         buildRoot()
         val host = object : FrameLayout(this) {
+            private val chinPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+            init {
+                setWillNotDraw(false)
+            }
+
+            override fun onDraw(canvas: Canvas) {
+                super.onDraw(canvas)
+                val padBottom = paddingBottom
+                if (padBottom > 0 && !floatActive()) {
+                    val isLucidVoid = if (::skin.isInitialized) (skin.id == "lucid-void" || skin.id == "lucid-void_light") else false
+                    val chinColor = if (isLucidVoid) {
+                        ColorUtils.setAlphaComponent(skin.background, 240)
+                    } else {
+                        resolveEffectiveNavBarColor()
+                    }
+                    chinPaint.color = chinColor
+                    canvas.drawRect(0f, (height - padBottom).toFloat(), width.toFloat(), height.toFloat(), chinPaint)
+                }
+            }
+
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                if (floatActive()) {
+                    super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+                } else {
+                    if (::rootLayout.isInitialized && rootLayout.parent === this) {
+                        measureChildWithMargins(rootLayout, widthMeasureSpec, 0, heightMeasureSpec, 0)
+                        val totalW = MeasureSpec.getSize(widthMeasureSpec)
+                        val totalH = rootLayout.measuredHeight + paddingTop + paddingBottom
+                        particleOverlay?.measure(
+                            MeasureSpec.makeMeasureSpec(totalW, MeasureSpec.EXACTLY),
+                            MeasureSpec.makeMeasureSpec(totalH, MeasureSpec.EXACTLY)
+                        )
+                        for (i in 0 until childCount) {
+                            val child = getChildAt(i)
+                            if (child !== rootLayout && child !== particleOverlay && child.visibility != GONE) {
+                                measureChildWithMargins(child, widthMeasureSpec, 0, heightMeasureSpec, 0)
+                            }
+                        }
+                        setMeasuredDimension(totalW, totalH)
+                    } else {
+                        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+                    }
+                }
+            }
+
             override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+                particleOverlay?.onTouch(ev.x, ev.y, ev.actionMasked)
                 if (floatActive() && ::rootLayout.isInitialized && rootLayout.parent === this) {
                     val pad = dp(48f).toFloat()
                     val rx = ev.x - rootLayout.left
@@ -838,10 +1004,16 @@ class KeyboardService : InputMethodService() {
         }.apply {
             clipChildren = false
             clipToPadding = false
-            val isLucidVoid = skin.id == "lucid-void" || skin.id == "lucid-void_light"
-            val isGlass = skin.glassEnabled || isLucidVoid
-            setBackgroundColor(if (floatActive() || isGlass) Color.TRANSPARENT else skin.background)
+            setBackgroundColor(Color.TRANSPARENT)
         }
+        particleOverlay = ParticleEffectView(this).apply {
+            effectStyle = particleStyle
+            if (::skin.isInitialized) {
+                primaryColor = skin.accent
+                secondaryColor = skin.textColor
+            }
+        }
+        host.addView(particleOverlay, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         imeHost = host
         ViewCompat.setOnApplyWindowInsetsListener(host) { _, insets ->
             onHostInsets(insets)
@@ -860,6 +1032,19 @@ class KeyboardService : InputMethodService() {
             accentColor = skin.accent
             clipChildren = false
             clipToPadding = false
+            val isLucidVoid = if (::skin.isInitialized) (skin.id == "lucid-void" || skin.id == "lucid-void_light") else false
+            if (isLucidVoid) {
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: android.graphics.Outline) {
+                        val d = resources.displayMetrics.density
+                        val topRadius = 20f * d
+                        outline.setRoundRect(0, 0, view.width, view.height + topRadius.toInt(), topRadius)
+                    }
+                }
+                clipToOutline = true
+            } else {
+                clipToOutline = false
+            }
             if (skin.backgroundDrawable != null) {
                 background = skin.backgroundDrawable
             } else {
@@ -891,12 +1076,12 @@ class KeyboardService : InputMethodService() {
         applyWindowBlurAndStyles()
         if (cachedEmojiPanel == null) {
             handler.removeCallbacks(prewarmEmojiRunnable)
-            handler.postDelayed(prewarmEmojiRunnable, 800L)
+            handler.postDelayed(prewarmEmojiRunnable, 50L)
         }
     }
 
     private fun beginInput(info: EditorInfo?, keepCurrentLayer: Boolean = false) {
-        autocorrectEngine.clear()
+        GnosisEngine.reset()
         dismissedGrammarIssues.clear()
         editingQuickKey = info?.privateImeOptions == ToolbarConfig.IME_QUICK_EDIT
         previewMode = info?.privateImeOptions == ToolbarConfig.IME_PREVIEW
@@ -920,6 +1105,7 @@ class KeyboardService : InputMethodService() {
         }
         shift = Shift.OFF
         isNewInputSession = true
+        hasTypedInCurrentSession = false
         currentWord.clear()
         lastCommittedWord = ""
         currentAutoCorrectCandidate = null
@@ -1104,6 +1290,11 @@ class KeyboardService : InputMethodService() {
             (rootLayout.parent as? ViewGroup)?.removeView(rootLayout)
             host.addView(rootLayout)
         }
+        particleOverlay?.let { p ->
+            if (p.parent === host) {
+                host.bringChildToFront(p)
+            }
+        }
         if (floatActive()) {
             host.minimumHeight = screenH() - dp(24f)
             host.background = null
@@ -1122,9 +1313,7 @@ class KeyboardService : InputMethodService() {
             }
         } else {
             host.minimumHeight = 0
-            val isLucidVoid = skin.id == "lucid-void" || skin.id == "lucid-void_light"
-            val isGlass = skin.glassEnabled || isLucidVoid
-            host.setBackgroundColor(if (isGlass) Color.TRANSPARENT else skin.background)
+            host.setBackgroundColor(Color.TRANSPARENT)
             rootLayout.layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -1599,7 +1788,8 @@ class KeyboardService : InputMethodService() {
         }
         if (::suggestionStrip.isInitialized) {
             val isLand = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-            val effBarH = if (isLand) 36f else BAR_H_DP
+            val savedClassicHeight = Skins.prefs(this).getInt(Skins.KEY_TOOLBAR_HEIGHT_CLASSIC, Skins.DEFAULT_TOOLBAR_HEIGHT_CLASSIC)
+            val effBarH = if (isLand) 36f else savedClassicHeight.toFloat()
             val hScale = s.coerceIn(0.65f, 1.15f)
             suggestionStrip.layoutParams.height = dp(effBarH * hScale)
             suggestionStrip.requestLayout()
@@ -1808,7 +1998,7 @@ class KeyboardService : InputMethodService() {
                 imeHost?.requestLayout()
             },
             onDismiss = { saved ->
-                host.removeView(resizeOverlay)
+                try { host.removeView(resizeOverlay) } catch (_: Exception) {}
                 resizeOverlay = null
                 if (saved) {
                     resizeManager.save()
@@ -1821,15 +2011,121 @@ class KeyboardService : InputMethodService() {
             }
         )
         resizeOverlay = overlay
+        overlay.elevation = dp(32f).toFloat()
         host.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+        overlay.bringToFront()
+        host.bringChildToFront(overlay)
+        host.requestLayout()
+    }
+
+    private fun showResizeOptionsPopup(anchor: View) {
+        val popupView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = dp(10f)
+            setPadding(pad, pad, pad, pad)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16f).toFloat()
+                setColor(skin.surface)
+                setStroke(dp(1.2f), skin.actionTextColor)
+            }
+            elevation = dp(10f).toFloat()
+        }
+
+        val popup = PopupWindow(popupView, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        }
+
+        val header = TextView(this).apply {
+            text = "Resize Keyboard"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setTypeface(skin.typeface, Typeface.BOLD)
+            setTextColor(skin.accent)
+            setPadding(dp(8f), dp(4f), dp(8f), dp(8f))
+        }
+        popupView.addView(header)
+
+        val options = listOf(
+            "Default Height (100%)" to {
+                resizeManager.heightPercent = 100
+                resizeManager.save()
+                applyHeightLive()
+                renderActiveLayer()
+                refreshSuggestionsNow()
+            },
+            "Compact Height (85%)" to {
+                resizeManager.heightPercent = 85
+                resizeManager.save()
+                applyHeightLive()
+                renderActiveLayer()
+                refreshSuggestionsNow()
+            },
+            "Tall Height (115%)" to {
+                resizeManager.heightPercent = 115
+                resizeManager.save()
+                applyHeightLive()
+                renderActiveLayer()
+                refreshSuggestionsNow()
+            },
+            "Interactive Drag Mode" to {
+                startOnKeyboardResize()
+            }
+        )
+
+        for ((label, action) in options) {
+            val tv = TextView(this).apply {
+                text = label
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                typeface = skin.typeface
+                setTextColor(skin.textColor)
+                val hPad = dp(12f)
+                val vPad = dp(8f)
+                setPadding(hPad, vPad, hPad, vPad)
+                background = skin.chipDrawable(density, false)
+                setOnClickListener {
+                    feedback(this)
+                    popup.dismiss()
+                    action()
+                }
+            }
+            popupView.addView(tv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(4f)
+            })
+        }
+
+        try {
+            popup.showAsDropDown(anchor, 0, -dp(190f))
+        } catch (_: Exception) {
+            try {
+                popup.showAtLocation(anchor, Gravity.CENTER, 0, 0)
+            } catch (_: Exception) {}
+        }
+    }
+
+    private var lastRevampedTypingContentHeight: Int = 0
+
+    private fun getRevampedTypingContentHeight(): Int {
+        if (lastRevampedTypingContentHeight > 0) return lastRevampedTypingContentHeight
+        val isLand = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val savedClassicHeight = Skins.prefs(this).getInt(Skins.KEY_TOOLBAR_HEIGHT_CLASSIC, Skins.DEFAULT_TOOLBAR_HEIGHT_CLASSIC)
+        val effBarH = if (isLand) 36f else savedClassicHeight.toFloat()
+        val hScale = heightScale().coerceIn(0.65f, 1.15f)
+        val barH = dp(effBarH * hScale)
+        val sizeScale = (skin.keyTileSize / 100f).coerceIn(0.70f, 1.30f)
+        val vGapFactor = (2f - sizeScale).coerceIn(0.15f, 2.2f)
+        val effVGap = (skin.keySpacingV * vGapFactor).coerceAtLeast(0.5f)
+        val rowH = dp(((KEY_HEIGHT_DP.toFloat() * sizeScale) + (effVGap * 2.0f)) * heightScale())
+        val numRows = if (numberRowEnabled) 5 else 4
+        val kbH = (numRows * rowH) + dp(10f)
+        return barH + kbH
     }
 
     private fun renderActiveLayer() {
         panelContainer.removeAllViews()
         dismissAllPopups()
         updateToolbarState()
+        val inTyping = (layer == Layer.LETTERS || layer == Layer.NUMBERS || layer == Layer.SYMBOLS || layer == Layer.NUMPAD)
         if (::suggestionStrip.isInitialized) {
-            val inTyping = (layer == Layer.LETTERS || layer == Layer.NUMBERS || layer == Layer.SYMBOLS || layer == Layer.NUMPAD)
             suggestionStrip.visibility = if (inTyping) View.VISIBLE else View.GONE
             if (inTyping && suggestionStrip.childCount == 0) {
                 refreshSuggestionsNow()
@@ -1848,6 +2144,16 @@ class KeyboardService : InputMethodService() {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
                     )
+                    addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                        if (layoutStyle == Skins.STYLE_REVAMPED && height > 0) {
+                            val barH = if (::suggestionStrip.isInitialized && suggestionStrip.height > 0) {
+                                suggestionStrip.height
+                            } else {
+                                dp(BAR_H_DP * heightScale())
+                            }
+                            lastRevampedTypingContentHeight = height + barH
+                        }
+                    }
                 }
                 buildKeyboardKeys(keyboardContainer)
                 panelContainer.addView(keyboardContainer)
@@ -1855,21 +2161,35 @@ class KeyboardService : InputMethodService() {
             Layer.EMOJI -> {
                 val emojiView = cachedEmojiPanel ?: buildEmojiPanel().also { cachedEmojiPanel = it }
                 (emojiView.parent as? ViewGroup)?.removeView(emojiView)
+                if (layoutStyle == Skins.STYLE_REVAMPED) {
+                    val targetH = getRevampedTypingContentHeight()
+                    emojiView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, targetH)
+                }
                 panelContainer.addView(emojiView)
             }
             Layer.CLIPBOARD -> {
                 val clipView = buildClipboardPanel()
+                if (layoutStyle == Skins.STYLE_REVAMPED) {
+                    val targetH = getRevampedTypingContentHeight()
+                    clipView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, targetH)
+                }
                 panelContainer.addView(clipView)
             }
             Layer.EDIT -> {
                 val editView = buildEditPanel()
+                if (layoutStyle == Skins.STYLE_REVAMPED) {
+                    val targetH = getRevampedTypingContentHeight()
+                    editView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, targetH)
+                }
                 panelContainer.addView(editView)
             }
         }
     }
 
-    private fun barColor(base: Int): Int =
-        if (photoExtended || skin.glassEnabled) Color.TRANSPARENT else base
+    private fun barColor(base: Int): Int {
+        val isLucidVoid = if (::skin.isInitialized) (skin.id == "lucid-void" || skin.id == "lucid-void_light") else false
+        return if (photoExtended || skin.glassEnabled || isLucidVoid) Color.TRANSPARENT else base
+    }
 
     private fun openSettings() {
         val intent = Intent(this, MainActivity::class.java).apply {
@@ -1899,6 +2219,10 @@ class KeyboardService : InputMethodService() {
 
         val fScale = floatWidthScale()
         val hScale = heightScale().coerceIn(0.65f, 1.15f)
+        val savedRevampedSize = Skins.prefs(this).getInt(Skins.KEY_REVAMPED_TOOLBAR_ICON_SIZE, Skins.DEFAULT_REVAMPED_TOOLBAR_ICON_SIZE)
+        val savedRevampedHeight = Skins.prefs(this).getInt(Skins.KEY_TOOLBAR_HEIGHT_REVAMPED, Skins.DEFAULT_TOOLBAR_HEIGHT_REVAMPED)
+        val iconDim = dp(savedRevampedSize.toFloat() * hScale).coerceAtLeast(dp(20f))
+        val tbH = dp(savedRevampedHeight.toFloat() * hScale).coerceAtLeast(iconDim + dp(6f))
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1907,7 +2231,7 @@ class KeyboardService : InputMethodService() {
             setPadding(dp(6f * fScale).coerceAtLeast(dp(2f)), dp(3f), dp(6f * fScale).coerceAtLeast(dp(2f)), dp(3f))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(42f * hScale)
+                tbH
             )
 
             val scroll = HorizontalScrollView(context).apply {
@@ -1922,9 +2246,9 @@ class KeyboardService : InputMethodService() {
                 layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
 
-            val btnW = dp(33f * fScale).coerceAtLeast(dp(24f))
-            val btnH = dp(32f * hScale).coerceAtLeast(dp(22f))
-            val btnPad = dp(6.5f * fScale).coerceAtLeast(dp(3f))
+            val btnW = (iconDim + dp(1f)).coerceAtLeast(dp(24f))
+            val btnH = iconDim.coerceAtLeast(dp(22f))
+            val btnPad = (iconDim * 0.20f).toInt().coerceIn(dp(2f), dp(8f))
             val btnMargin = dp(3.5f * fScale).coerceAtLeast(dp(2f))
 
             fun revampedIconBtn(resId: Int, contentDesc: String, active: Boolean = false, onClick: () -> Unit): ImageView {
@@ -1971,6 +2295,13 @@ class KeyboardService : InputMethodService() {
             toolbarEditBtn = editBtn
             row.addView(editBtn)
 
+            lateinit var fontBtn: ImageView
+            fontBtn = revampedIconBtn(R.drawable.ic_font, "Cool Fonts", active = activeCoolFont != CoolFontEngine.FontStyle.NORMAL) {
+                showCoolFontSelectorPopup(fontBtn)
+            }
+            toolbarFontBtn = fontBtn
+            row.addView(fontBtn)
+
             val floatBtn = revampedIconBtn(R.drawable.ic_floating, "Floating", active = floatActive()) {
                 handler.post { toggleFloating() }
             }
@@ -1999,33 +2330,6 @@ class KeyboardService : InputMethodService() {
                 openSettings()
             })
 
-            val effectiveLang = GnosisLanguageManager.resolveEffectiveLanguage(this@KeyboardService)
-            val langLabel = effectiveLang.shortLabel
-            val langPill = TextView(context).apply {
-                text = langLabel
-                gravity = Gravity.CENTER
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, (11f * fScale).coerceIn(9f, 11f))
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(skin.textColor)
-                background = skin.chipDrawable(density, false)
-                val pillPadH = dp(8f * fScale).coerceAtLeast(dp(4f))
-                setPadding(pillPadH, dp(3f), pillPadH, dp(3f))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, btnH).apply {
-                    marginStart = dp(2f)
-                    marginEnd = btnMargin
-                }
-                setOnClickListener {
-                    feedback(this)
-                    cycleLanguageAndLayout()
-                }
-                setOnLongClickListener {
-                    feedback(this)
-                    openLayoutSettings()
-                    true
-                }
-            }
-            row.addView(langPill)
-
             scroll.addView(row)
             addView(scroll)
         }
@@ -2036,6 +2340,7 @@ class KeyboardService : InputMethodService() {
         toolboxClipBtn = null
         toolboxEditBtn = null
         toolboxFloatBtn = null
+        toolboxFontBtn = null
 
         val scroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -2073,6 +2378,14 @@ class KeyboardService : InputMethodService() {
                     toolboxEditBtn = editBtn
                     row.addView(editBtn)
                 }
+                "fonts" -> {
+                    lateinit var fontBtn: View
+                    fontBtn = createToolbarIconButton(R.drawable.ic_font, "Cool Fonts", active = activeCoolFont != CoolFontEngine.FontStyle.NORMAL) {
+                        showCoolFontSelectorPopup(fontBtn)
+                    }
+                    toolboxFontBtn = fontBtn
+                    row.addView(fontBtn)
+                }
                 "float" -> {
                     val floatBtn = createToolbarIconButton(R.drawable.ic_floating, "Floating keyboard", active = floatActive()) {
                         handler.post { toggleFloating() }
@@ -2083,6 +2396,11 @@ class KeyboardService : InputMethodService() {
                 "resize" -> {
                     val resizeBtn = createToolbarIconButton(R.drawable.ic_scaling, "Resize") {
                         startOnKeyboardResize()
+                    }
+                    resizeBtn.setOnLongClickListener {
+                        feedback(it)
+                        showResizeOptionsPopup(it)
+                        true
                     }
                     row.addView(resizeBtn)
                 }
@@ -2103,7 +2421,18 @@ class KeyboardService : InputMethodService() {
         val d = ContextCompat.getDrawable(this, iconRes)?.mutate()
         d?.setTint(if (active) skin.actionTextColor else skin.textColor)
         (btn as? ImageView)?.setImageDrawable(d)
-        btn.background = skin.chipDrawable(density, active)
+        val style = Skins.prefs(this).getString(Skins.KEY_LAYOUT_STYLE, Skins.STYLE_REVAMPED) ?: Skins.STYLE_REVAMPED
+        val isRevampedButton = (btn == toolbarEmojiBtn || btn == toolbarOneHandedBtn || btn == toolbarMicBtn ||
+                btn == toolbarClipBtn || btn == toolbarEditBtn || btn == toolbarFloatBtn || btn == toolbarFontBtn)
+        if (style == Skins.STYLE_REVAMPED || isRevampedButton) {
+            btn.background = skin.chipDrawable(density, active)
+        } else {
+            btn.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(if (active) skin.accent else skin.keyColor)
+                setStroke(dp(1f), if (active) skin.accent else ColorUtils.setAlphaComponent(skin.textColor, 36))
+            }
+        }
     }
 
     private fun updateToolbarState() {
@@ -2113,6 +2442,7 @@ class KeyboardService : InputMethodService() {
         val isClip = (layer == Layer.CLIPBOARD)
         val isEdit = (layer == Layer.EDIT)
         val isFloat = floatActive()
+        val isCoolFontActive = (activeCoolFont != CoolFontEngine.FontStyle.NORMAL)
 
         updateButtonHighlight(toolbarEmojiBtn, R.drawable.ic_smile, isEmoji)
         updateButtonHighlight(toolbarOneHandedBtn, R.drawable.ic_smartphone, isOneHanded)
@@ -2120,11 +2450,13 @@ class KeyboardService : InputMethodService() {
         updateButtonHighlight(toolbarClipBtn, R.drawable.ic_clipboard, isClip)
         updateButtonHighlight(toolbarEditBtn, R.drawable.ic_type, isEdit)
         updateButtonHighlight(toolbarFloatBtn, R.drawable.ic_floating, isFloat)
+        updateButtonHighlight(toolbarFontBtn, R.drawable.ic_font, isCoolFontActive)
 
         updateButtonHighlight(toolboxMicBtn, R.drawable.ic_mic, isVoice)
         updateButtonHighlight(toolboxClipBtn, R.drawable.ic_clipboard, isClip)
         updateButtonHighlight(toolboxEditBtn, R.drawable.ic_type, isEdit)
         updateButtonHighlight(toolboxFloatBtn, R.drawable.ic_floating, isFloat)
+        updateButtonHighlight(toolboxFontBtn, R.drawable.ic_font, isCoolFontActive)
     }
 
     private fun barWidthPx(): Int = when {
@@ -2144,17 +2476,26 @@ class KeyboardService : InputMethodService() {
     private fun createToolbarIconButton(resId: Int, contentDesc: String, active: Boolean = false, onClick: () -> Unit): View {
         val fScale = floatWidthScale()
         val hScale = heightScale().coerceIn(0.65f, 1.15f)
+        val savedClassicSize = Skins.prefs(this).getInt(Skins.KEY_CLASSIC_TOOLBAR_ICON_SIZE, Skins.DEFAULT_CLASSIC_TOOLBAR_ICON_SIZE)
+        val btnDim = dp(savedClassicSize.toFloat() * hScale).coerceAtLeast(dp(22f))
         return ImageView(this).apply {
             val d = ContextCompat.getDrawable(context, resId)?.mutate()
             d?.setTint(if (active) skin.actionTextColor else skin.textColor)
             setImageDrawable(d)
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            val pad = dp(8f * fScale).coerceAtLeast(dp(3f))
+            val pad = (btnDim * 0.20f).toInt().coerceIn(dp(2f), dp(9f))
             setPadding(pad, pad, pad, pad)
-            background = skin.chipDrawable(density, active)
-            layoutParams = LinearLayout.LayoutParams(barBtnW(), dp(BAR_BTN_H_DP * hScale)).apply {
-                marginEnd = dp(BAR_GAP_DP * fScale).coerceAtLeast(dp(2f))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(if (active) skin.accent else skin.keyColor)
+                setStroke(dp(1f), if (active) skin.accent else ColorUtils.setAlphaComponent(skin.textColor, 36))
             }
+            layoutParams = LinearLayout.LayoutParams(btnDim, btnDim).apply {
+                val gap = dp(BAR_GAP_DP * fScale).coerceAtLeast(dp(3f))
+                marginStart = gap / 2
+                marginEnd = gap / 2
+            }
+            contentDescription = contentDesc
             setOnClickListener {
                 feedback(this)
                 onClick()
@@ -2164,7 +2505,8 @@ class KeyboardService : InputMethodService() {
 
     private fun buildSuggestionStrip(): LinearLayout {
         val isLand = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val effBarH = if (isLand) 36f else BAR_H_DP
+        val savedClassicHeight = Skins.prefs(this).getInt(Skins.KEY_TOOLBAR_HEIGHT_CLASSIC, Skins.DEFAULT_TOOLBAR_HEIGHT_CLASSIC)
+        val effBarH = if (isLand) 36f else savedClassicHeight.toFloat()
         val hScale = heightScale().coerceIn(0.65f, 1.15f)
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -2210,6 +2552,31 @@ class KeyboardService : InputMethodService() {
         }
     }
 
+    private fun scheduleOnlineSuggestions(word: String, prevWord: String) {
+        if (!OnlineSuggestionEngine.isEnabled(this)) return
+        val key = "$prevWord|$word"
+        if (key == lastQueriedOnlineKey) return
+        onlineQueryRunnable?.let { handler.removeCallbacks(it) }
+        val r = Runnable {
+            if (isListeningVoice || toolboxOpen) return@Runnable
+            val curWordStr = currentWord.toString()
+            if (word.isNotEmpty() && curWordStr != word) return@Runnable
+            if (word.isEmpty() && curWordStr.isNotEmpty()) return@Runnable
+
+            val langCode = GnosisLanguageManager.resolveEffectiveLanguage(this).code
+            OnlineSuggestionEngine.query(word, prevWord, langCode) { onlineWords ->
+                val stillMatching = if (word.isNotEmpty()) currentWord.toString() == word else currentWord.isEmpty()
+                if (stillMatching && onlineWords.isNotEmpty()) {
+                    lastQueriedOnlineKey = key
+                    cachedOnlineWords = onlineWords
+                    refreshSuggestionsNow()
+                }
+            }
+        }
+        onlineQueryRunnable = r
+        handler.postDelayed(r, 220L)
+    }
+
     private fun refreshSuggestions() {
         if (!::suggestionStrip.isInitialized) return
         refreshEnterKeys()
@@ -2229,6 +2596,7 @@ class KeyboardService : InputMethodService() {
         }
 
         val ic = currentInputConnection
+        val textBefore = ic?.getTextBeforeCursor(80, 0)?.toString() ?: ""
         val activeWord = if (currentWord.isNotEmpty()) {
             currentWord.toString()
         } else if (ic != null) {
@@ -2258,32 +2626,84 @@ class KeyboardService : InputMethodService() {
         val isPassword = isPasswordField()
         val isUrl = if (ic != null) isUrlOrEmail(ic) else false
 
-        if (showToolbox || ic == null || !suggestionsEnabled || layer == Layer.NUMPAD || activeWord.isEmpty()) {
+        if (showToolbox || ic == null || !suggestionsEnabled || layer == Layer.NUMPAD) {
             suggestions = emptyList()
             currentAutoCorrectCandidate = null
             currentEmojiSuggestions = emptyList()
-        } else {
-            val contextWords = extractContextWords(ic, activeWord)
-            val effectiveLang = GnosisLanguageManager.resolveEffectiveLanguage(this)
-            val (suggs, ac, emojis) = try {
-                if (suggestionEngine == null) {
-                    suggestionEngine = EngineFactory.getSuggestionEngine(this, userDictionary, effectiveLang.code)
-                }
-                val suggResult = suggestionEngine!!.generateSuggestions(activeWord, contextWords, isPassword, isUrl, language = effectiveLang.code)
-                val wordList = suggResult.words.map { it.word }.filter { it.isNotBlank() }
-                val finalWords = if (wordList.isNotEmpty()) wordList else (if (activeWord.isNotEmpty()) listOf(activeWord) else emptyList())
-                Triple(
-                    finalWords,
-                    suggResult.autoCorrectCandidate,
-                    if (emojiSuggestionsEnabled) suggResult.emojiSuggestions else emptyList()
-                )
+        } else if (activeWord.isNotEmpty()) {
+            val candidates = try {
+                GnosisEngine.generateCandidates(activeWord, textBefore)
             } catch (t: Throwable) {
-                android.util.Log.e("KeyboardService", "generateSuggestions error", t)
-                Triple(if (activeWord.isNotEmpty()) listOf(activeWord) else emptyList(), null, emptyList())
+                android.util.Log.e("KeyboardService", "generateCandidates error", t)
+                emptyList()
             }
-            suggestions = suggs
-            currentAutoCorrectCandidate = ac
-            currentEmojiSuggestions = emojis
+            currentAutoCorrectCandidate = candidates.firstOrNull { it.type == CandidateType.AUTO_CORRECT }
+            val rawList = mutableListOf<String>()
+            val ac = currentAutoCorrectCandidate
+            if (ac != null && !ac.text.equals(activeWord, ignoreCase = true)) {
+                // Emoji Keyboard / LatinIME layout:
+                // Left slot: verbatim literal typed word (allows 1-tap keeping exact word without autocorrection)
+                rawList.add(activeWord)
+                // Center slot: autocorrect candidate (accented/bold)
+                rawList.add(ac.text)
+                // Right slot: alternate candidates
+                for (c in candidates) {
+                    if (!c.text.equals(activeWord, ignoreCase = true) && !c.text.equals(ac.text, ignoreCase = true)) {
+                        rawList.add(c.text)
+                    }
+                }
+            } else {
+                for (c in candidates) {
+                    if (!rawList.any { it.equals(c.text, ignoreCase = true) }) {
+                        rawList.add(c.text)
+                    }
+                }
+                if (rawList.isEmpty()) rawList.add(activeWord)
+            }
+            if (OnlineSuggestionEngine.isEnabled(this) && cachedOnlineWords.isNotEmpty()) {
+                for (w in cachedOnlineWords) {
+                    if (!rawList.any { it.equals(w, ignoreCase = true) } && rawList.size < 4) {
+                        rawList.add(w)
+                    }
+                }
+            }
+            suggestions = rawList
+            currentEmojiSuggestions = if (emojiSuggestionsEnabled) {
+                EmojiSuggestionEngine.getEmojiSuggestions(activeWord)
+            } else {
+                emptyList()
+            }
+
+            if (!isPassword && !isUrl) {
+                scheduleOnlineSuggestions(activeWord, lastCommittedWord)
+            }
+        } else {
+            // Idle state: show predictions if user has typed in session or if text context exists
+            currentAutoCorrectCandidate = null
+            currentEmojiSuggestions = emptyList()
+            if (predictionsEnabled && !isPassword && !isUrl && !showToolbox && (hasTypedInCurrentSession || textBefore.trim().isNotEmpty())) {
+                val nextWords = try {
+                    GnosisEngine.predictNextWords(textBefore).toMutableList()
+                } catch (t: Throwable) {
+                    mutableListOf()
+                }
+                if (OnlineSuggestionEngine.isEnabled(this) && cachedOnlineWords.isNotEmpty()) {
+                    for (w in cachedOnlineWords) {
+                        if (!nextWords.any { it.equals(w, ignoreCase = true) } && nextWords.size < 3) {
+                            nextWords.add(w)
+                        }
+                    }
+                }
+                if (nextWords.isEmpty()) {
+                    nextWords.addAll(listOf("the", "to", "and"))
+                }
+                suggestions = nextWords.take(3)
+                if (lastCommittedWord.isNotEmpty()) {
+                    scheduleOnlineSuggestions("", lastCommittedWord)
+                }
+            } else {
+                suggestions = emptyList()
+            }
         }
 
         val suggContainer = LinearLayout(this).apply {
@@ -2414,12 +2834,14 @@ class KeyboardService : InputMethodService() {
         }
 
         val grammarIssue = if (grammarCheckEnabled && !isPassword && !isUrl && activeWord.isEmpty() && ic != null) {
-            val textBefore = ic.getTextBeforeCursor(100, 0)?.toString()
-            val issue = gnosis.keyboard.engine.grammar.GnosisGrammarEngine.checkGrammar(textBefore)
-            if (issue != null && !dismissedGrammarIssues.contains(issue.originalText)) issue else null
+            val textBefore = ic.getTextBeforeCursor(100, 0)?.toString() ?: ""
+            val issue = GnosisEngine.checkGrammar(textBefore)
+            if (issue != null && !dismissedGrammarIssues.contains(issue.originalText)) {
+                issue
+            } else null
         } else null
 
-        if (grammarIssue != null && !showToolbox && recentClip == null) {
+        if (grammarIssue != null && !showToolbox) {
             val proofreadCard = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -2503,7 +2925,7 @@ class KeyboardService : InputMethodService() {
                 }
                 suggContainer.addView(qBtn)
             }
-        } else if (suggestions.isEmpty() && !showToolbox && recentClip == null) {
+        } else if (suggestions.isEmpty() && (!hasTypedInCurrentSession || (textBefore.trim().isEmpty() && currentWord.isEmpty())) && !showToolbox && recentClip == null) {
             val hint = TextView(this).apply {
                 text = "Type or glide for suggestions"
                 maxLines = 1
@@ -2543,17 +2965,27 @@ class KeyboardService : InputMethodService() {
                     ellipsize = android.text.TextUtils.TruncateAt.END
                     val effSp = (scaledSp * fScale).coerceIn(9f, 15f)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, effSp)
-                    if (isCenter) setTypeface(null, Typeface.BOLD)
-                    setTextColor(if (isCenter) skin.accentText else skin.textColor)
-                    val effHPad = (hPad * fScale).toInt().coerceAtLeast(dp(2f))
+                    typeface = skin.typeface
+                    if (isCenter) setTypeface(skin.typeface, Typeface.BOLD)
+
+                    setTextColor(if (isCenter) skin.accent else skin.textColor)
+                    val effHPad = (hPad * fScale).toInt().coerceAtLeast(dp(4f))
                     setPadding(effHPad, dp(2f), effHPad, dp(2f))
+
                     background = skin.chipDrawable(density, false)
+
                     layoutParams = LinearLayout.LayoutParams(0, dp(34f * hScale), weight).apply {
                         marginEnd = dp(4f * fScale).coerceAtLeast(dp(2f))
                     }
                     setOnClickListener {
                         feedback(this)
-                        commitSuggestion(word)
+                        if (activeWord.isNotEmpty() && word == activeWord && currentAutoCorrectCandidate != null && !word.equals(currentAutoCorrectCandidate?.text, ignoreCase = true)) {
+                            commitSuggestion(activeWord)
+                            GnosisEngine.suppressWord(activeWord)
+                            userDictionary.addWord(activeWord)
+                        } else {
+                            commitSuggestion(word)
+                        }
                     }
                 }
                 suggContainer.addView(suggBtn)
@@ -2724,8 +3156,10 @@ class KeyboardService : InputMethodService() {
             tag = "voice_status_tv"
             this.text = text
             setTextColor(if (isError) Color.parseColor("#EF4444") else if (isSpoken) skin.textColor else skin.subtleTextColor)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, if (isSpoken) 14.5f else 13f)
-            setTypeface(null, if (isSpoken) Typeface.BOLD else Typeface.ITALIC)
+            val effSp = if (isError) 11.5f else if (isSpoken) 14f else 12.5f
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, effSp)
+            setTypeface(null, if (isSpoken) Typeface.BOLD else if (isError) Typeface.BOLD else Typeface.ITALIC)
+            includeFontPadding = false
             maxLines = 1
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
@@ -2769,16 +3203,15 @@ class KeyboardService : InputMethodService() {
         scrollContainer.post { scrollContainer.fullScroll(View.FOCUS_RIGHT) }
     }
 
-    private val dismissedGrammarIssues = HashSet<String>()
 
-    private fun applyGrammarFix(ic: InputConnection, issue: gnosis.keyboard.engine.grammar.GnosisGrammarEngine.GrammarIssue) {
+    private fun applyGrammarFix(ic: InputConnection, issue: GnosisGrammarIssue) {
         val before = ic.getTextBeforeCursor(120, 0)?.toString() ?: return
         val orig = issue.originalText
-        var idx = before.lastIndexOf(orig)
+        var idx = before.lastIndexOf(orig, ignoreCase = true)
         var matchedLen = orig.length
         if (idx < 0) {
             val trimmedOrig = orig.trim()
-            idx = before.lastIndexOf(trimmedOrig)
+            idx = before.lastIndexOf(trimmedOrig, ignoreCase = true)
             matchedLen = trimmedOrig.length
         }
         if (idx >= 0) {
@@ -2810,20 +3243,19 @@ class KeyboardService : InputMethodService() {
                 ic.deleteSurroundingText(active.length, 0)
             }
         }
-        if (active.isNotEmpty() && word.equals(active, ignoreCase = true) && currentAutoCorrectCandidate != null && !word.equals(currentAutoCorrectCandidate?.word, ignoreCase = true)) {
-            autocorrectEngine.suppressWord(active)
+        val prefs = Skins.prefs(this)
+        if (active.isNotEmpty() && word.equals(active, ignoreCase = true) && currentAutoCorrectCandidate != null && !word.equals(currentAutoCorrectCandidate?.text, ignoreCase = true)) {
+            GnosisEngine.suppressWord(active)
             userDictionary.addWord(active)
         }
-        val prefs = Skins.prefs(this)
         if (prefs.getBoolean(TypingStatisticsRepository.PREF_STATS_ENABLED, true) && !isPasswordField()) {
             statsRepository.recordSuggestionAccepted(word)
         }
         ic.commitText("$word ", 1)
         try {
             if (!previewMode) {
-                getTypingEngine()?.onWordCommitted(word, extractContextWords(ic, ""))
+                GnosisEngine.onWordCommitted(word, extractContextWords(ic, word))
                 WordDictionary.learn(this, word)
-                gnosis.keyboard.engine.vector.GnosisNeuralVectorEngine.recordUserSelection(extractContextWords(ic, ""), word)
             }
             if (lastCommittedWord.isNotEmpty() && !previewMode) {
                 WordDictionary.learnTransition(this, lastCommittedWord, word)
@@ -2833,6 +3265,7 @@ class KeyboardService : InputMethodService() {
         }
         lastCommittedWord = word
         isNewInputSession = false
+        hasTypedInCurrentSession = true
         currentWord.clear()
         currentAutoCorrectCandidate = null
         updateSuggestions()
@@ -2976,9 +3409,16 @@ class KeyboardService : InputMethodService() {
         r3.addView(key("12\n34", 1.2f, special = true, keyId = "NUMPAD") {
             switchLayer(Layer.NUMPAD)
         })
-        r3.addView(symbolOrLetterKey(',', 1.0f))
-        r3.addView(spaceKey(3.9f))
-        r3.addView(symbolOrLetterKey('.', 1.0f))
+        if (layoutStyle == Skins.STYLE_REVAMPED) {
+            r3.addView(symbolOrLetterKey(',', 1.0f))
+            r3.addView(spaceKey(3.9f))
+            r3.addView(symbolOrLetterKey('.', 1.0f))
+        } else {
+            r3.addView(symbolOrLetterKey(',', 0.8f))
+            r3.addView(buildEmojiKey(1.0f))
+            r3.addView(spaceKey(3.4f))
+            r3.addView(symbolOrLetterKey('.', 0.8f))
+        }
         r3.addView(buildEnterKey(1.5f))
         container.addView(r3)
     }
@@ -3013,9 +3453,16 @@ class KeyboardService : InputMethodService() {
         r3.addView(key("12\n34", 1.2f, special = true, keyId = "NUMPAD") {
             switchLayer(Layer.NUMPAD)
         })
-        r3.addView(symbolOrLetterKey('<', 1.0f))
-        r3.addView(spaceKey(3.9f))
-        r3.addView(symbolOrLetterKey('>', 1.0f))
+        if (layoutStyle == Skins.STYLE_REVAMPED) {
+            r3.addView(symbolOrLetterKey('<', 1.0f))
+            r3.addView(spaceKey(3.9f))
+            r3.addView(symbolOrLetterKey('>', 1.0f))
+        } else {
+            r3.addView(symbolOrLetterKey('<', 0.8f))
+            r3.addView(buildEmojiKey(1.0f))
+            r3.addView(spaceKey(3.4f))
+            r3.addView(symbolOrLetterKey('>', 0.8f))
+        }
         r3.addView(buildEnterKey(1.5f))
         container.addView(r3)
     }
@@ -3116,33 +3563,16 @@ class KeyboardService : InputMethodService() {
 
     private fun buildBottomRow(container: LinearLayout, switchLabel: String, switchTo: Layer) {
         val r = newRow()
-        r.addView(key(switchLabel, 1.4f, special = true, onLongClick = {
+        r.addView(key(switchLabel, 1.3f, special = true, onLongClick = {
             switchLayer(Layer.NUMPAD)
         }) {
             switchLayer(switchTo)
         })
-        r.addView(symbolOrLetterKey(',', 0.9f))
-
-        val effectiveLang = GnosisLanguageManager.resolveEffectiveLanguage(this@KeyboardService)
-        val currentLangLabel = effectiveLang.shortLabel
-
-        r.addView(key(
-            label = currentLangLabel,
-            weight = 0.9f,
-            special = true,
-            keyId = "LANG",
-            onLongClick = {
-                buzz()
-                openLayoutSettings()
-            }
-        ) {
-            feedback(this)
-            cycleLanguageAndLayout()
-        })
-
-        r.addView(spaceKey(3.8f))
-        r.addView(symbolOrLetterKey('.', 0.9f))
-        r.addView(buildEnterKey(1.5f))
+        r.addView(symbolOrLetterKey(',', 0.85f))
+        r.addView(buildEmojiKey(1.0f))
+        r.addView(spaceKey(4.45f))
+        r.addView(symbolOrLetterKey('.', 0.85f))
+        r.addView(buildEnterKey(1.55f))
         container.addView(r)
     }
 
@@ -3219,7 +3649,7 @@ class KeyboardService : InputMethodService() {
 
         fun cancelMyLongPress() {
             myLongPress?.let {
-                handler.removeCallbacks(it)
+                mainHandler.removeCallbacks(it)
                 activeLongPresses.remove(it)
             }
             myLongPress = null
@@ -3232,6 +3662,9 @@ class KeyboardService : InputMethodService() {
                 dismissPreview()
                 v.isPressed = false
                 val isL = ch.isLetter()
+                if (isL) {
+                    GnosisEngine.recordTouch(ch, startX, startY)
+                }
                 typeText(if (isL) cased(ch).toString() else ch.toString(), isLetter = isL)
             }
         }
@@ -3252,15 +3685,11 @@ class KeyboardService : InputMethodService() {
                     startY = e.rawY
                     swipePoints.clear()
 
-                    val rootPos = IntArray(2)
-                    rootLayout.getLocationOnScreen(rootPos)
-                    swipePoints.add(PointF(e.rawX - rootPos[0], e.rawY - rootPos[1]))
-
                     if (keyPopupEnabled) {
                         showCharacterPreview(v, if (ch.isLetter()) cased(ch).toString() else ch.toString())
                     }
 
-                    val alts = getAltCandidates(ch)
+                    val alts = altCandidatesCache.getOrPut(ch) { getAltCandidates(ch) }
                     if (alts.isNotEmpty()) {
                         val runnable = object : Runnable {
                             override fun run() {
@@ -3277,7 +3706,7 @@ class KeyboardService : InputMethodService() {
                         }
                         myLongPress = runnable
                         activeLongPresses.add(runnable)
-                        handler.postDelayed(runnable, longPressMs)
+                        mainHandler.postDelayed(runnable, longPressMs)
                     }
                 }
 
@@ -3288,15 +3717,9 @@ class KeyboardService : InputMethodService() {
                     }
 
                     val dist = hypot(e.rawX - startX, e.rawY - startY)
-                    val outside = dist > dp(24f)
+                    val touchSlop = dp(44f)
 
-                    if (!isSwiping && glideEnabled && layer == Layer.LETTERS) {
-                        val rootPos = IntArray(2)
-                        rootLayout.getLocationOnScreen(rootPos)
-                        swipePoints.add(PointF(e.rawX - rootPos[0], e.rawY - rootPos[1]))
-                    }
-
-                    if (!isSwiping && outside && glideEnabled && layer == Layer.LETTERS &&
+                    if (!isSwiping && glideEnabled && layer == Layer.LETTERS &&
                         e.eventTime - downTime > GLIDE_MIN_MS &&
                         dist > dp(SWIPE_START_DP.toFloat())
                     ) {
@@ -3308,6 +3731,12 @@ class KeyboardService : InputMethodService() {
                         cancelMyLongPress()
                         dismissPreview()
                         rootLayout.clearTrail()
+                        val rootPos = IntArray(2)
+                        rootLayout.getLocationOnScreen(rootPos)
+                        val startPx = startX - rootPos[0]
+                        val startPy = startY - rootPos[1]
+                        swipePoints.add(PointF(startPx, startPy))
+                        rootLayout.addTrailPoint(startPx, startPy)
                     }
 
                     if (isSwiping) {
@@ -3317,10 +3746,7 @@ class KeyboardService : InputMethodService() {
                         val py = e.rawY - rootPos[1]
                         swipePoints.add(PointF(px, py))
                         rootLayout.addTrailPoint(px, py)
-                    } else if (outside) {
-                        if (pendingRolloverCommit === commitKeyAction) {
-                            pendingRolloverCommit = null
-                        }
+                    } else if (dist > touchSlop) {
                         cancelMyLongPress()
                         dismissPreview()
                         v.isPressed = false
@@ -3396,6 +3822,7 @@ class KeyboardService : InputMethodService() {
         val baseSz = when {
             isPunct -> 22f
             label.contains('\n') -> 11f
+            keyId == "LANG" || label.equals("EN", ignoreCase = true) || (label.length == 2 && special) -> 12.5f
             label.length > 2 -> 13.5f
             else -> 19f
         }
@@ -3483,7 +3910,7 @@ class KeyboardService : InputMethodService() {
         resId: Int,
         weight: Float,
         repeat: Boolean = false,
-        baseIconDp: Float = 21f,
+        baseIconDp: Float = if (layoutStyle == Skins.STYLE_CLASSICS) 32f else 21f,
         keyId: String = "ACTION",
         onClick: () -> Unit
     ): View {
@@ -3497,7 +3924,8 @@ class KeyboardService : InputMethodService() {
             isFocusable = true
         }
 
-        val initialSz = (dp(baseIconDp * skin.fontScale) * kScale).toInt().coerceIn(dp(10f), dp(26f))
+        val maxIconDp = if (layoutStyle == Skins.STYLE_CLASSICS) 32f else 26f
+        val initialSz = (dp(baseIconDp * skin.fontScale) * kScale).toInt().coerceIn(dp(10f), dp(maxIconDp))
         val iv = ImageView(this).apply {
             setImageDrawable(d)
             scaleType = ImageView.ScaleType.FIT_CENTER
@@ -3516,7 +3944,7 @@ class KeyboardService : InputMethodService() {
                 val hDp = h / density
                 val targetW = (36f * weight).coerceAtLeast(24f)
                 val factor = minOf((wDp / targetW).coerceIn(0.40f, 1.25f), (hDp / 50f).coerceIn(0.40f, 1.25f))
-                val iconSz = (dp(baseIconDp * skin.fontScale) * factor).toInt().coerceIn(dp(10f), dp(26f))
+                val iconSz = (dp(baseIconDp * skin.fontScale) * factor).toInt().coerceIn(dp(10f), dp(maxIconDp))
                 val lp = iv.layoutParams as? FrameLayout.LayoutParams
                 if (lp != null && (lp.width != iconSz || lp.height != iconSz)) {
                     lp.width = iconSz
@@ -3550,8 +3978,9 @@ class KeyboardService : InputMethodService() {
             isFocusable = true
         }
 
-        val baseIconDp = 22f
-        val initialSz = (dp(baseIconDp * skin.fontScale) * kScale).toInt().coerceIn(dp(10f), dp(26f))
+        val baseIconDp = if (layoutStyle == Skins.STYLE_CLASSICS) 32f else 22f
+        val maxIconDp = if (layoutStyle == Skins.STYLE_CLASSICS) 32f else 26f
+        val initialSz = (dp(baseIconDp * skin.fontScale) * kScale).toInt().coerceIn(dp(10f), dp(maxIconDp))
         val opticalOffset = (dp(1.2f) * kScale).toInt()
         val iv = ImageView(this).apply {
             setImageDrawable(d)
@@ -3570,7 +3999,7 @@ class KeyboardService : InputMethodService() {
                 val hDp = h / density
                 val targetW = (36f * weight).coerceAtLeast(24f)
                 val factor = minOf((wDp / targetW).coerceIn(0.40f, 1.25f), (hDp / 50f).coerceIn(0.40f, 1.25f))
-                val iconSz = (dp(baseIconDp * skin.fontScale) * factor).toInt().coerceIn(dp(10f), dp(26f))
+                val iconSz = (dp(baseIconDp * skin.fontScale) * factor).toInt().coerceIn(dp(10f), dp(maxIconDp))
                 val optOffset = (dp(1.2f) * factor).toInt()
                 val lp = iv.layoutParams as? FrameLayout.LayoutParams
                 if (lp != null && (lp.width != iconSz || lp.height != iconSz || lp.rightMargin != optOffset)) {
@@ -3587,12 +4016,65 @@ class KeyboardService : InputMethodService() {
         return container
     }
 
+    private fun buildEmojiKey(weight: Float): View {
+        val d = ContextCompat.getDrawable(this, R.drawable.ic_smile)?.mutate()
+        d?.setTint(skin.textColorFor("EMOJI", special = true))
+        val kScale = keyScaleFactor()
+        val container = FrameLayout(this).apply {
+            background = keyInset(skin.keyBackgroundFor("EMOJI", density, special = true))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Emoji"
+        }
+
+        val baseIconDp = if (layoutStyle == Skins.STYLE_CLASSICS) 32f else 22f
+        val maxIconDp = if (layoutStyle == Skins.STYLE_CLASSICS) 32f else 26f
+        val initialSz = (dp(baseIconDp * skin.fontScale) * kScale).toInt().coerceIn(dp(12f), dp(maxIconDp))
+        val iv = ImageView(this).apply {
+            setImageDrawable(d)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            layoutParams = FrameLayout.LayoutParams(initialSz, initialSz, Gravity.CENTER)
+        }
+        container.addView(iv)
+
+        container.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            val w = right - left
+            val h = bottom - top
+            if (w > 0 && h > 0 && (w != (oldRight - oldLeft) || h != (oldBottom - oldTop))) {
+                val dynScale = keyScaleFactor()
+                val targetSz = (dp(baseIconDp * skin.fontScale) * dynScale).toInt().coerceIn(dp(10f), dp(maxIconDp))
+                val lp = iv.layoutParams as? FrameLayout.LayoutParams
+                if (lp != null && (lp.width != targetSz || lp.height != targetSz)) {
+                    lp.width = targetSz
+                    lp.height = targetSz
+                    iv.layoutParams = lp
+                }
+            }
+        }
+
+        container.setOnClickListener {
+            feedback(it)
+            switchLayer(if (layer == Layer.EMOJI) Layer.LETTERS else Layer.EMOJI)
+        }
+        return container
+    }
+
     private var activeLayoutSwitcherPopup: PopupWindow? = null
     private var activeSwitcherOverlay: View? = null
+    private var activeClipOverlay: View? = null
 
     private fun showLayoutSwitcherPopup(anchor: View) {
         dismissAllPopups()
+        val host = imeHost ?: return
         val popupW = (screenW() * 0.90f).toInt().coerceAtMost(dp(360f))
+
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#70000000"))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { dismissAllPopups() }
+        }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -3603,6 +4085,8 @@ class KeyboardService : InputMethodService() {
             }
             setPadding(dp(16f), dp(16f), dp(16f), dp(16f))
             elevation = dp(14f).toFloat()
+            isClickable = true
+            layoutParams = FrameLayout.LayoutParams(popupW, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER)
         }
 
         val header = LinearLayout(this).apply {
@@ -3652,6 +4136,11 @@ class KeyboardService : InputMethodService() {
                     feedback(this)
                     layoutStyle = sId
                     Skins.prefs(this@KeyboardService).edit().putString(Skins.KEY_LAYOUT_STYLE, sId).apply()
+                    val ic = currentInputConnection
+                    val before = ic?.getTextBeforeCursor(40, 0)?.toString() ?: ""
+                    if (currentWord.isEmpty() && before.trim().isEmpty()) {
+                        hasTypedInCurrentSession = false
+                    }
                     dismissAllPopups()
                     renderFullKeyboard()
                 }
@@ -3687,64 +4176,13 @@ class KeyboardService : InputMethodService() {
             root.addView(itemContainer)
         }
 
-        val host = imeHost
-        if (host != null && host.isAttachedToWindow) {
-            val scroller = ScrollView(this).apply {
-                isVerticalScrollBarEnabled = false
-                overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-                addView(root)
-            }
-            val backdrop = FrameLayout(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                setBackgroundColor(Color.argb(175, 8, 12, 20))
-                isClickable = true
-                isFocusable = false
-                setOnClickListener {
-                    dismissAllPopups()
-                }
-            }
-            val cardParams = FrameLayout.LayoutParams(
-                popupW,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                gravity = Gravity.CENTER
-                val pad = dp(8f)
-                setMargins(pad, pad, pad, pad)
-            }
-            scroller.isClickable = true
-            backdrop.addView(scroller, cardParams)
-            host.addView(backdrop)
-            activeSwitcherOverlay = backdrop
-            if (floatActive()) {
-                window.window?.decorView?.requestLayout()
-            }
-            return
-        }
-
-        val popup = PopupWindow(root, popupW, ViewGroup.LayoutParams.WRAP_CONTENT, false).apply {
-            windowLayoutType = WindowManager.LayoutParams.TYPE_APPLICATION_PANEL
-            isOutsideTouchable = true
-            isFocusable = false
-            elevation = dp(14f).toFloat()
-            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        }
-        activeLayoutSwitcherPopup = popup
-        popup.setOnDismissListener {
-            if (activeLayoutSwitcherPopup === popup) activeLayoutSwitcherPopup = null
-        }
-        val target = window.window?.decorView ?: imeHost ?: anchor
-        try {
-            popup.showAtLocation(target, Gravity.CENTER, 0, 0)
-        } catch (_: Exception) {
-            try {
-                popup.showAtLocation(anchor, Gravity.CENTER, 0, 0)
-            } catch (_: Exception) {
-                cycleLayout()
-            }
-        }
+        val container = host
+        overlay.addView(root)
+        activeSwitcherOverlay = overlay
+        container.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        overlay.elevation = dp(32f).toFloat()
+        overlay.bringToFront()
+        container.bringChildToFront(overlay)
     }
 
     private fun spaceKey(weight: Float): TextView {
@@ -3795,6 +4233,9 @@ class KeyboardService : InputMethodService() {
         }
 
         var startX = 0f
+        var lastTouchX = 0f
+        var accumulatedTrackpadDx = 0f
+        var cursorTrackpadActive = false
         var cursorMoved = false
         var longPressed = false
         var longPressRunnable: Runnable? = null
@@ -3807,49 +4248,76 @@ class KeyboardService : InputMethodService() {
                     v.isPressed = true
                     feedback(v)
                     startX = e.rawX
+                    lastTouchX = e.rawX
+                    accumulatedTrackpadDx = 0f
+                    cursorTrackpadActive = false
                     cursorMoved = false
                     longPressed = false
                     longPressRunnable = Runnable {
                         if (!cursorMoved) {
-                            longPressed = true
-                            v.isPressed = false
-                            buzz()
-                            showLayoutSwitcherPopup(v)
-                        }
-                    }
-                    handler.postDelayed(longPressRunnable!!, longPressMs)
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    v.parent?.requestDisallowInterceptTouchEvent(true)
-                    val diff = e.rawX - startX
-                    val slop = dp(8f)
-                    if (Math.abs(diff) >= slop) {
-                        longPressRunnable?.let { handler.removeCallbacks(it) }
-                    }
-                    if (cursorControlEnabled && !longPressed) {
-                        val step = dp(12f)
-                        if (Math.abs(diff) >= step) {
-                            val ic = currentInputConnection
-                            if (ic != null) {
-                                val steps = (diff / step).toInt()
-                                moveCursor(ic, steps)
+                            val spaceHoldEnabled = Skins.prefs(this@KeyboardService).getBoolean(
+                                Skins.KEY_SPACE_HOLD_SWITCH_LAYOUT,
+                                Skins.DEFAULT_SPACE_HOLD_SWITCH_LAYOUT
+                            )
+                            if (spaceHoldEnabled) {
+                                longPressed = true
+                                v.isPressed = false
                                 buzz()
-                                cursorMoved = true
-                                startX += steps * step
+                                showLayoutSwitcherPopup(v)
                             }
                         }
                     }
+                    // Requirement: 260 ms delay for hold spacebar layout switch
+                    val spaceLayoutSwitchDelayMs = 260L
+                    mainHandler.postDelayed(longPressRunnable!!, spaceLayoutSwitchDelayMs)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                    val dx = e.rawX - lastTouchX
+                    lastTouchX = e.rawX
+                    val totalDx = e.rawX - startX
+
+                    if (cursorControlEnabled && !longPressed) {
+                        if (!cursorTrackpadActive) {
+                            if (Math.abs(totalDx) >= dp(14f)) {
+                                cursorTrackpadActive = true
+                                cursorMoved = true
+                                accumulatedTrackpadDx = 0f
+                                longPressRunnable?.let { mainHandler.removeCallbacks(it) }
+                            }
+                        }
+
+                        if (cursorTrackpadActive) {
+                            accumulatedTrackpadDx += dx
+                            val stepPx = dp(9f).toFloat().coerceAtLeast(14f)
+                            val steps = (accumulatedTrackpadDx / stepPx).toInt()
+                            if (steps != 0) {
+                                accumulatedTrackpadDx -= steps * stepPx
+                                val ic = currentInputConnection
+                                if (ic != null) {
+                                    moveCursor(ic, steps)
+                                    try {
+                                        v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                    } catch (_: Exception) {}
+                                }
+                            }
+                        }
+                    } else if (Math.abs(totalDx) >= dp(32f)) {
+                        longPressRunnable?.let { mainHandler.removeCallbacks(it) }
+                    }
                 }
                 MotionEvent.ACTION_UP -> {
-                    longPressRunnable?.let { handler.removeCallbacks(it) }
+                    longPressRunnable?.let { mainHandler.removeCallbacks(it) }
                     v.isPressed = false
+                    cursorTrackpadActive = false
                     if (!cursorMoved && !longPressed) {
                         handleSpacePress()
                     }
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    longPressRunnable?.let { handler.removeCallbacks(it) }
+                    longPressRunnable?.let { mainHandler.removeCallbacks(it) }
                     v.isPressed = false
+                    cursorTrackpadActive = false
                 }
             }
             true
@@ -3894,7 +4362,10 @@ class KeyboardService : InputMethodService() {
             isFocusable = true
         }
 
-        val initialIconSz = (dp(19f) * kScale).toInt().coerceIn(dp(12f), dp(22f))
+        val isClassic = (layoutStyle == Skins.STYLE_CLASSICS)
+        val baseEnterIcon = if (isClassic) 32f else 19f
+        val maxEnterIcon = if (isClassic) 32f else 22f
+        val initialIconSz = (dp(baseEnterIcon) * kScale).toInt().coerceIn(dp(12f), dp(maxEnterIcon))
         val icon = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             layoutParams = LinearLayout.LayoutParams(initialIconSz, initialIconSz)
@@ -3920,7 +4391,7 @@ class KeyboardService : InputMethodService() {
                 val hDp = h / density
                 val targetW = (32f * weight).coerceAtLeast(24f)
                 val factor = minOf((wDp / targetW).coerceIn(0.45f, 1.25f), (hDp / 50f).coerceIn(0.50f, 1.25f))
-                val iconSz = (dp(19f) * factor).toInt().coerceIn(dp(12f), dp(22f))
+                val iconSz = (dp(baseEnterIcon) * factor).toInt().coerceIn(dp(12f), dp(maxEnterIcon))
                 icon.layoutParams = LinearLayout.LayoutParams(iconSz, iconSz)
                 titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, (9.5f * factor * skin.fontScale).coerceIn(6.5f, 11f))
             }
@@ -3941,12 +4412,14 @@ class KeyboardService : InputMethodService() {
 
     private fun isFieldEmpty(): Boolean {
         if (editingQuickKey) return false
+        if (currentWord.isNotEmpty()) return false
         val info = currentInputEditorInfo ?: return false
         if (info.inputType == InputType.TYPE_NULL) return false
         val ic = currentInputConnection ?: return false
-        val before = ic.getTextBeforeCursor(1, 0) ?: return false
-        val after = ic.getTextAfterCursor(1, 0) ?: return false
-        return before.isEmpty() && after.isEmpty()
+        val before = ic.getTextBeforeCursor(1, 0)
+        val after = ic.getTextAfterCursor(1, 0)
+        if (before == null && after == null) return false
+        return (before?.isEmpty() ?: true) && (after?.isEmpty() ?: true)
     }
 
     private fun applyEnterState(r: EnterKeyRefs) {
@@ -3989,6 +4462,11 @@ class KeyboardService : InputMethodService() {
             action != EditorInfo.IME_ACTION_UNSPECIFIED &&
             ic.performEditorAction(action)
         if (!handled) sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
+        hasTypedInCurrentSession = false
+        currentWord.clear()
+        lastCommittedWord = ""
+        currentAutoCorrectCandidate = null
+        updateSuggestions()
     }
 
     private val previewHideRunnable = Runnable { dismissPreview() }
@@ -4263,6 +4741,8 @@ class KeyboardService : InputMethodService() {
         dismissPreview()
         dismissAltPopup()
         dismissSkinTonePopup()
+        try { activeCoolFontPopup?.dismiss() } catch (_: Exception) {}
+        activeCoolFontPopup = null
         try { clipOptionsPopup?.dismiss() } catch (_: Exception) {}
         clipOptionsPopup = null
         activeLayoutSwitcherPopup?.dismiss()
@@ -4273,6 +4753,10 @@ class KeyboardService : InputMethodService() {
             if (floatActive()) {
                 window.window?.decorView?.requestLayout()
             }
+        }
+        activeClipOverlay?.let {
+            (it.parent as? ViewGroup)?.removeView(it)
+            activeClipOverlay = null
         }
     }
 
@@ -4370,6 +4854,25 @@ class KeyboardService : InputMethodService() {
         val actionBtnH = dp(32f * hScale).coerceAtLeast(dp(24f))
         val actionPad = dp(6.5f * fScale).coerceAtLeast(dp(3.5f))
 
+        var toggleEmojiSearch: () -> Unit = {}
+        val searchBtn = ImageView(this).apply {
+            contentDescription = "Search emoji"
+            val d = ContextCompat.getDrawable(context, R.drawable.ic_search)?.mutate()
+            d?.setTint(skin.textColor)
+            setImageDrawable(d)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(actionPad, actionPad, actionPad, actionPad)
+            background = skin.chipDrawable(density, false)
+            layoutParams = LinearLayout.LayoutParams(actionBtnW, actionBtnH).apply {
+                marginStart = dp(4f * fScale).coerceAtLeast(dp(2f))
+            }
+            setOnClickListener {
+                feedback(this)
+                toggleEmojiSearch()
+            }
+        }
+        topBar.addView(searchBtn)
+
         val closeBtn = ImageView(this).apply {
             contentDescription = "Close emoji"
             val d = ContextCompat.getDrawable(context, R.drawable.ic_x)?.mutate()
@@ -4389,6 +4892,54 @@ class KeyboardService : InputMethodService() {
         }
         topBar.addView(closeBtn)
         panel.addView(topBar)
+
+        val searchBarContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            val padH = dp(8f)
+            setPadding(padH, dp(4f), padH, dp(4f))
+            background = skin.chipDrawable(density, false)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dp(8f)
+                marginEnd = dp(8f)
+                topMargin = dp(4f)
+                bottomMargin = dp(4f)
+            }
+        }
+        val searchEt = EditText(this).apply {
+            hint = "Search emojis offline (e.g. fire, smile, lol)..."
+            setHintTextColor(skin.subtleTextColor)
+            setTextColor(skin.textColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            background = null
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setSingleLine(true)
+        }
+        val searchClearBtn = ImageView(this).apply {
+            val d = ContextCompat.getDrawable(context, R.drawable.ic_x)?.mutate()
+            d?.setTint(skin.subtleTextColor)
+            setImageDrawable(d)
+            setPadding(dp(4f), dp(4f), dp(4f), dp(4f))
+            layoutParams = LinearLayout.LayoutParams(dp(24f), dp(24f))
+            setOnClickListener {
+                searchEt.setText("")
+            }
+        }
+        searchBarContainer.addView(searchEt)
+        searchBarContainer.addView(searchClearBtn)
+        panel.addView(searchBarContainer)
+
+        val searchScroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            visibility = View.GONE
+        }
+        val searchResultsContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4f), dp(4f), dp(4f), dp(8f))
+        }
+        searchScroll.addView(searchResultsContent)
+        panel.addView(searchScroll)
 
         var onSwipe: (Int) -> Unit = {}
         val swipeDetector = android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
@@ -4444,6 +4995,72 @@ class KeyboardService : InputMethodService() {
             }
         }
 
+        searchEt.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                val q = s?.toString()?.trim() ?: ""
+                if (q.isEmpty()) {
+                    searchResultsContent.removeAllViews()
+                    searchScroll.visibility = View.GONE
+                    emojiScroll.visibility = View.VISIBLE
+                } else {
+                    val matches = EmojiSuggestionEngine.search(q, 48)
+                    searchResultsContent.removeAllViews()
+                    if (matches.isEmpty()) {
+                        searchResultsContent.addView(TextView(this@KeyboardService).apply {
+                            text = "No emojis found for '$q'"
+                            gravity = Gravity.CENTER
+                            setTextColor(skin.subtleTextColor)
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                            setPadding(0, dp(24f), 0, dp(24f))
+                        })
+                    } else {
+                        renderEmojiGridRows(searchResultsContent, matches) {
+                            refreshRecents()
+                        }
+                    }
+                    searchScroll.visibility = View.VISIBLE
+                    emojiScroll.visibility = View.GONE
+                }
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
+        toggleEmojiSearch = {
+            if (searchBarContainer.visibility == View.VISIBLE) {
+                searchBarContainer.visibility = View.GONE
+                searchScroll.visibility = View.GONE
+                emojiScroll.visibility = View.VISIBLE
+                searchEt.setText("")
+            } else {
+                searchBarContainer.visibility = View.VISIBLE
+                searchEt.requestFocus()
+            }
+        }
+
+        val categoryContents = ArrayList<LinearLayout>(EmojiData.categoryLabels.size)
+        val categoryLoaded = BooleanArray(EmojiData.categoryLabels.size)
+
+        fun loadCategory(idx: Int) {
+            if (idx !in 0 until EmojiData.categoryLabels.size) return
+            if (categoryLoaded[idx]) return
+            categoryLoaded[idx] = true
+            val content = categoryContents.getOrNull(idx) ?: return
+            when (idx) {
+                0 -> {
+                    recentsContent = content
+                    refreshRecents()
+                }
+                10 -> renderKaomojiSections(content)
+                11 -> renderEmojiComboSections(content)
+                else -> {
+                    renderEmojiGridRows(content, EmojiData.getSupportedSet(idx - 1)) {
+                        refreshRecents()
+                    }
+                }
+            }
+        }
+
         for (i in EmojiData.categoryLabels.indices) {
             val sectionLayout = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -4465,19 +5082,30 @@ class KeyboardService : InputMethodService() {
 
             val content = LinearLayout(this@KeyboardService).apply { orientation = LinearLayout.VERTICAL }
             sectionLayout.addView(content)
-
-            if (i == 0) {
-                recentsContent = content
-                refreshRecents()
-            } else {
-                renderEmojiGridRows(content, EmojiData.getSupportedSet(i - 1)) {
-                    refreshRecents()
-                }
-            }
+            categoryContents.add(content)
 
             categorySectionViews.add(sectionLayout)
             scrollContent.addView(sectionLayout)
         }
+
+        loadCategory(0)
+        loadCategory(1)
+        mainHandler.post {
+            loadCategory(2)
+            loadCategory(3)
+        }
+        mainHandler.postDelayed({
+            loadCategory(4)
+            loadCategory(5)
+            loadCategory(6)
+        }, 20L)
+        mainHandler.postDelayed({
+            loadCategory(7)
+            loadCategory(8)
+            loadCategory(9)
+            loadCategory(10)
+            loadCategory(11)
+        }, 40L)
 
         val bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -4558,6 +5186,7 @@ class KeyboardService : InputMethodService() {
         }
 
         fun scrollToCategory(idx: Int, smooth: Boolean = true) {
+            loadCategory(idx)
             val target = categorySectionViews.getOrNull(idx) ?: return
             currentEmojiCategoryIndex = idx
             updateTabStyles(idx)
@@ -4589,6 +5218,10 @@ class KeyboardService : InputMethodService() {
                 } else {
                     break
                 }
+            }
+            loadCategory(activeIdx)
+            if (activeIdx + 1 < EmojiData.categoryLabels.size) {
+                loadCategory(activeIdx + 1)
             }
             if (activeIdx != currentEmojiCategoryIndex) {
                 currentEmojiCategoryIndex = activeIdx
@@ -4963,6 +5596,111 @@ class KeyboardService : InputMethodService() {
         return true
     }
 
+    private fun renderKaomojiSections(content: LinearLayout) {
+        val fScale = floatWidthScale()
+        val categories = KaomojiData.getKaomojiCategories(this)
+        for (cat in categories) {
+            val subHeader = TextView(this).apply {
+                text = cat.title.uppercase()
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, (10.5f * fScale).coerceIn(8.5f, 11f))
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(ColorUtils.setAlphaComponent(skin.textColor, 180))
+                setPadding(dp(8f), dp(8f), dp(8f), dp(4f))
+            }
+            content.addView(subHeader)
+
+            val chunkCols = 3
+            cat.items.chunked(chunkCols).forEach { chunk ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = dp(4f)
+                    }
+                }
+                for (item in chunk) {
+                    val pill = TextView(this).apply {
+                        text = item
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, (12.5f * fScale).coerceIn(10.5f, 14f))
+                        setTextColor(skin.textColor)
+                        gravity = Gravity.CENTER
+                        background = skin.chipDrawable(density, false)
+                        setPadding(dp(4f), dp(8f), dp(4f), dp(8f))
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                            marginStart = dp(2f)
+                            marginEnd = dp(2f)
+                        }
+                        setOnClickListener {
+                            feedback(this)
+                            typeText(item)
+                        }
+                    }
+                    row.addView(pill)
+                }
+                for (k in chunk.size until chunkCols) {
+                    row.addView(View(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, 1, 1f).apply {
+                            marginStart = dp(2f)
+                            marginEnd = dp(2f)
+                        }
+                    })
+                }
+                content.addView(row)
+            }
+        }
+    }
+
+    private fun renderEmojiComboSections(content: LinearLayout) {
+        val fScale = floatWidthScale()
+        val comboCategories = KaomojiData.getEmojiCombos(this)
+        for (cat in comboCategories) {
+            val subHeader = TextView(this).apply {
+                text = cat.title.uppercase()
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, (10.5f * fScale).coerceIn(8.5f, 11f))
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(ColorUtils.setAlphaComponent(skin.textColor, 180))
+                setPadding(dp(8f), dp(8f), dp(8f), dp(4f))
+            }
+            content.addView(subHeader)
+
+            for (combo in cat.items) {
+                val card = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = skin.chipDrawable(density, false)
+                    setPadding(dp(10f), dp(8f), dp(10f), dp(8f))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = dp(6f)
+                        marginStart = dp(4f)
+                        marginEnd = dp(4f)
+                    }
+                    addView(TextView(this@KeyboardService).apply {
+                        text = combo.art
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, (12f * fScale).coerceIn(10f, 13.5f))
+                        setTextColor(skin.textColor)
+                        typeface = Typeface.MONOSPACE
+                        gravity = Gravity.CENTER
+                    })
+                    if (combo.keywords.isNotBlank()) {
+                        val tags = combo.keywords.split(',').filter { it.isNotBlank() }.take(3).joinToString(" • ")
+                        if (tags.isNotBlank()) {
+                            addView(TextView(this@KeyboardService).apply {
+                                text = tags
+                                setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
+                                setTextColor(skin.subtleTextColor)
+                                gravity = Gravity.CENTER
+                                setPadding(0, dp(2f), 0, 0)
+                            })
+                        }
+                    }
+                    setOnClickListener {
+                        feedback(this)
+                        typeText(combo.art)
+                    }
+                }
+                content.addView(card)
+            }
+        }
+    }
+
     private fun buildClipboardPanel(): View {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -5035,6 +5773,26 @@ class KeyboardService : InputMethodService() {
         }
         header.addView(optionsBtn)
 
+        val addSnippetBtn = ImageView(this).apply {
+            val d = ContextCompat.getDrawable(context, R.drawable.ic_plus)?.mutate()
+            d?.setTint(skin.textColor)
+            setImageDrawable(d)
+            background = skin.chipDrawable(density, false)
+            setPadding(dp(6f), dp(6f), dp(6f), dp(6f))
+            layoutParams = LinearLayout.LayoutParams(dp(32f), dp(32f)).apply {
+                marginStart = dp(8f)
+            }
+            contentDescription = "Add Custom Snippet"
+            setOnClickListener {
+                feedback(this)
+                switchLayer(Layer.LETTERS)
+                this@KeyboardService.mainHandler.postDelayed({
+                    showCannedSnippetsBar(suggestionStrip)
+                }, 120L)
+            }
+        }
+        header.addView(addSnippetBtn)
+
         val closeBtn = ImageView(this).apply {
             val d = ContextCompat.getDrawable(context, R.drawable.ic_x)?.mutate()
             d?.setTint(skin.textColor)
@@ -5061,6 +5819,562 @@ class KeyboardService : InputMethodService() {
         return panel
     }
 
+    private fun showCoolFontSelectorPopup(anchor: View) {
+        if (activeCoolFontPopup?.isShowing == true) {
+            try { activeCoolFontPopup?.dismiss() } catch (_: Exception) {}
+            activeCoolFontPopup = null
+            return
+        }
+
+        val popupW = (screenW() * 0.92f).toInt()
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14f).toFloat()
+                setColor(skin.surface)
+                setStroke(dp(1.2f), skin.chipBorderColor)
+            }
+            elevation = dp(12f).toFloat()
+            val pad = dp(12f)
+            setPadding(pad, pad, pad, pad)
+            layoutParams = ViewGroup.LayoutParams(popupW, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(10f)
+            }
+        }
+        headerRow.addView(TextView(this).apply {
+            text = "Cool Fonts Unicode Stylizer"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(skin.textColor)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        headerRow.addView(ImageView(this).apply {
+            val d = ContextCompat.getDrawable(context, R.drawable.ic_x)?.mutate()
+            d?.setTint(skin.subtleTextColor)
+            setImageDrawable(d)
+            setPadding(dp(4f), dp(4f), dp(4f), dp(4f))
+            layoutParams = LinearLayout.LayoutParams(dp(24f), dp(24f))
+            setOnClickListener {
+                feedback(this)
+                try { activeCoolFontPopup?.dismiss() } catch (_: Exception) {}
+                activeCoolFontPopup = null
+            }
+        })
+        card.addView(headerRow)
+
+        val scroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        val chipRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        for (style in CoolFontEngine.FontStyle.values()) {
+            val isSelected = (style == activeCoolFont)
+            val chip = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
+                background = skin.chipDrawable(density, isSelected)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginEnd = dp(8f)
+                }
+                addView(TextView(this@KeyboardService).apply {
+                    text = style.previewText
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(if (isSelected) skin.actionTextColor else skin.textColor)
+                    gravity = Gravity.CENTER
+                })
+                addView(TextView(this@KeyboardService).apply {
+                    text = style.displayName
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                    setTextColor(if (isSelected) skin.actionTextColor else skin.subtleTextColor)
+                    gravity = Gravity.CENTER
+                })
+                setOnClickListener {
+                    feedback(this)
+                    activeCoolFont = style
+                    Skins.prefs(this@KeyboardService).edit().putString(Skins.KEY_COOL_FONT, style.id).apply()
+                    updateToolbarState()
+                    Toast.makeText(this@KeyboardService, "Font: ${style.displayName}", Toast.LENGTH_SHORT).show()
+                    try { activeCoolFontPopup?.dismiss() } catch (_: Exception) {}
+                    activeCoolFontPopup = null
+                }
+            }
+            chipRow.addView(chip)
+        }
+        scroll.addView(chipRow)
+        card.addView(scroll)
+
+        val popup = PopupWindow(card, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true
+            isFocusable = true
+            elevation = dp(12f).toFloat()
+        }
+        activeCoolFontPopup = popup
+        val loc = IntArray(2)
+        anchor.getLocationOnScreen(loc)
+        card.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+        val yOff = -(anchor.height + card.measuredHeight + dp(8f))
+        try {
+            popup.showAsDropDown(anchor, dp(8f), yOff)
+            buzz()
+        } catch (_: Exception) {}
+    }
+
+    private var activeCannedSnippetsPopup: PopupWindow? = null
+
+    private fun showCannedSnippetsBar(anchor: View? = null) {
+        try { activeCannedSnippetsPopup?.dismiss() } catch (_: Exception) {}
+        activeCannedSnippetsPopup = null
+
+        val fScale = floatWidthScale()
+        val targetAnchor = if (floatActive() && floatCard != null) floatCard!! else (imeHost ?: (if (::rootLayout.isInitialized) rootLayout else null))
+        val kbW = if (floatActive() && floatCard != null && floatCard!!.width > 0) {
+            floatCard!!.width
+        } else if (::rootLayout.isInitialized && rootLayout.width > 0) {
+            rootLayout.width
+        } else {
+            screenW()
+        }
+        val cardW = ((kbW - dp(16f)) * fScale).toInt().coerceIn(dp(260f), dp(440f)).coerceAtMost(screenW() - dp(12f))
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16f).toFloat()
+                setColor(skin.surface)
+                setStroke(dp(1.2f), skin.chipBorderColor)
+            }
+            elevation = dp(16f).toFloat()
+            val pad = dp(10f * fScale).coerceIn(dp(8f), dp(14f))
+            setPadding(pad, pad, pad, pad)
+            layoutParams = ViewGroup.LayoutParams(cardW, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(8f)
+            }
+        }
+
+        val titleTv = TextView(this).apply {
+            text = "Canned Snippets & Quick Phrases"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(skin.textColor)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        headerRow.addView(titleTv)
+
+        // (i) Information icon shows what the feature is for
+        val infoBtn = ImageView(this).apply {
+            val d = ContextCompat.getDrawable(context, R.drawable.ic_info)?.mutate()
+            d?.setTint(skin.accent)
+            setImageDrawable(d)
+            background = skin.chipDrawable(density, false)
+            val p = dp(5f)
+            setPadding(p, p, p, p)
+            layoutParams = LinearLayout.LayoutParams(dp(26f), dp(26f)).apply {
+                marginEnd = dp(8f)
+            }
+            contentDescription = "What is Canned Snippets"
+            setOnClickListener {
+                feedback(this)
+                showCannedSnippetInfoDialog()
+            }
+        }
+        headerRow.addView(infoBtn)
+
+        val closeBtn = ImageView(this).apply {
+            val d = ContextCompat.getDrawable(context, R.drawable.ic_x)?.mutate()
+            d?.setTint(skin.subtleTextColor)
+            setImageDrawable(d)
+            val p = dp(4f)
+            setPadding(p, p, p, p)
+            layoutParams = LinearLayout.LayoutParams(dp(26f), dp(26f))
+            setOnClickListener {
+                feedback(this)
+                try { activeCannedSnippetsPopup?.dismiss() } catch (_: Exception) {}
+                activeCannedSnippetsPopup = null
+            }
+        }
+        headerRow.addView(closeBtn)
+        card.addView(headerRow)
+
+        // Quick typebox row for typing / saving phrases directly in the panel
+        val typeboxRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10f).toFloat()
+                setColor(ColorUtils.setAlphaComponent(skin.surface, 220))
+                setStroke(dp(1f), skin.chipBorderColor)
+            }
+            setPadding(dp(10f), dp(4f), dp(6f), dp(4f))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(10f)
+            }
+        }
+
+        val typeInput = EditText(this).apply {
+            hint = "Type quick phrase to save..."
+            setHintTextColor(ColorUtils.setAlphaComponent(skin.textColor, 130))
+            setTextColor(skin.textColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setBackgroundColor(Color.TRANSPARENT)
+            maxLines = 2
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        typeboxRow.addView(typeInput)
+
+        val saveSnippetBtn = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8f).toFloat()
+                setColor(skin.accent)
+            }
+            setPadding(dp(10f), dp(5f), dp(10f), dp(5f))
+            val saveTv = TextView(this@KeyboardService).apply {
+                text = "Save"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Skins.getContrastingTextColor(skin.accent))
+            }
+            addView(saveTv)
+            setOnClickListener {
+                feedback(this)
+                val text = typeInput.text?.toString()?.trim() ?: ""
+                if (text.isNotEmpty()) {
+                    ClipboardHistory.addSnippet(this@KeyboardService, text)
+                    typeInput.text = null
+                    showCannedSnippetsBar()
+                }
+            }
+        }
+        typeboxRow.addView(saveSnippetBtn)
+        card.addView(typeboxRow)
+
+        val scroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        val chipRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        // [+ Add] button
+        val addPill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14f).toFloat()
+                setColor(ColorUtils.setAlphaComponent(skin.accent, 40))
+                setStroke(dp(1.2f), skin.accent)
+            }
+            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = dp(8f)
+            }
+            val plusTv = TextView(this@KeyboardService).apply {
+                text = "+ Add"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(if (skin.accentText != 0) skin.accentText else skin.accent)
+            }
+            addView(plusTv)
+            setOnClickListener {
+                feedback(this)
+                try { activeCannedSnippetsPopup?.dismiss() } catch (_: Exception) {}
+                activeCannedSnippetsPopup = null
+                showInlineAddSnippetDialog()
+            }
+        }
+        chipRow.addView(addPill)
+
+        val snippets = ClipboardHistory.getItems(this, ClipboardHistory.CAT_TEXT).filter { it.isPinned }
+        for (item in snippets) {
+            val previewText = item.text.replace("\n", " ").trim()
+            val shortText = if (previewText.length > 22) previewText.take(20) + "..." else previewText
+            val pill = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = skin.chipDrawable(density, false)
+                setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginEnd = dp(8f)
+                }
+                val tv = TextView(this@KeyboardService).apply {
+                    text = shortText
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                    setTextColor(skin.textColor)
+                    setTypeface(skin.typeface, Typeface.NORMAL)
+                    maxLines = 1
+                }
+                addView(tv)
+                setOnClickListener {
+                    feedback(this)
+                    typeText(item.text)
+                    try { activeCannedSnippetsPopup?.dismiss() } catch (_: Exception) {}
+                    activeCannedSnippetsPopup = null
+                }
+            }
+            chipRow.addView(pill)
+        }
+
+        if (snippets.isEmpty()) {
+            val emptyTv = TextView(this).apply {
+                text = "No pinned snippets yet. Tap '+ Add' to save phrases"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                setTextColor(skin.subtleTextColor)
+                setPadding(dp(6f), 0, dp(6f), 0)
+            }
+            chipRow.addView(emptyTv)
+        }
+
+        scroll.addView(chipRow)
+        card.addView(scroll)
+
+        val popup = PopupWindow(card, cardW, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true
+            isFocusable = true
+            isClippingEnabled = false
+            elevation = dp(20f).toFloat()
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        }
+        activeCannedSnippetsPopup = popup
+
+        if (targetAnchor == null) return
+        val padBottom = imeHost?.paddingBottom ?: 0
+        val kbHeight = if (::rootLayout.isInitialized && rootLayout.height > 0) rootLayout.height else dp(260f)
+        val yOffset = if (floatActive() && floatCard != null && imeHost != null && imeHost!!.height > 0) {
+            val cardTop = floatCard!!.top
+            (imeHost!!.height - cardTop) + dp(14f)
+        } else {
+            kbHeight + padBottom + dp(14f)
+        }
+        try {
+            popup.showAtLocation(targetAnchor, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, yOffset)
+            buzz()
+        } catch (_: Exception) {}
+    }
+
+    private fun showCannedSnippetInfoDialog() {
+        val popupW = (screenW() * 0.88f).toInt().coerceAtMost(dp(340f))
+        val infoCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16f).toFloat()
+                setColor(skin.surface)
+                setStroke(dp(1.2f), skin.chipBorderColor)
+            }
+            elevation = dp(20f).toFloat()
+            val pad = dp(16f)
+            setPadding(pad, pad, pad, pad)
+            layoutParams = ViewGroup.LayoutParams(popupW, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(10f))
+        }
+        val icon = ImageView(this).apply {
+            val d = ContextCompat.getDrawable(context, R.drawable.ic_info)?.mutate()
+            d?.setTint(skin.accent)
+            setImageDrawable(d)
+            layoutParams = LinearLayout.LayoutParams(dp(20f), dp(20f)).apply { marginEnd = dp(8f) }
+        }
+        val title = TextView(this).apply {
+            text = "About Canned Snippets"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(skin.textColor)
+        }
+        header.addView(icon)
+        header.addView(title)
+        infoCard.addView(header)
+
+        val desc = TextView(this).apply {
+            text = "Canned snippets allow you to store and instantly paste frequently used phrases, email templates, addresses, and messages with a single tap.\n\nUse the typebox to quickly save phrases, or tap 'Manage in Settings' to configure and reorganize your shortcuts."
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextColor(ColorUtils.setAlphaComponent(skin.textColor, 210))
+            setLineSpacing(dp(2f).toFloat(), 1.15f)
+            setPadding(0, 0, 0, dp(14f))
+        }
+        infoCard.addView(desc)
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+        }
+        var infoPopup: PopupWindow? = null
+
+        val settingsBtn = TextView(this).apply {
+            text = "Manage in Settings"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(skin.accent)
+            background = skin.chipDrawable(density, false)
+            setPadding(dp(10f), dp(6f), dp(10f), dp(6f))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = dp(8f)
+            }
+            setOnClickListener {
+                feedback(this)
+                try { infoPopup?.dismiss() } catch (_: Exception) {}
+                try { activeCannedSnippetsPopup?.dismiss() } catch (_: Exception) {}
+                try {
+                    val intent = Intent(this@KeyboardService, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra(MainActivity.EXTRA_NAVIGATE_TO, MainActivity.TARGET_CLIPBOARD)
+                    }
+                    startActivity(intent)
+                } catch (_: Exception) {}
+            }
+        }
+        btnRow.addView(settingsBtn)
+
+        val okBtn = TextView(this).apply {
+            text = "Got it"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Skins.getContrastingTextColor(skin.accent))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8f).toFloat()
+                setColor(skin.accent)
+            }
+            setPadding(dp(14f), dp(6f), dp(14f), dp(6f))
+            setOnClickListener {
+                feedback(this)
+                try { infoPopup?.dismiss() } catch (_: Exception) {}
+            }
+        }
+        btnRow.addView(okBtn)
+        infoCard.addView(btnRow)
+
+        val popup = PopupWindow(infoCard, popupW, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true
+            isFocusable = true
+            elevation = dp(22f).toFloat()
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        }
+        infoPopup = popup
+        val kbHeight = if (::rootLayout.isInitialized && rootLayout.height > 0) rootLayout.height else dp(260f)
+        try {
+            popup.showAtLocation(rootLayout, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, kbHeight + dp(20f))
+        } catch (_: Exception) {}
+    }
+
+    private fun showInlineAddSnippetDialog() {
+        val popupW = (screenW() * 0.90f).toInt().coerceAtMost(dp(360f))
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14f).toFloat()
+                setColor(skin.surface)
+                setStroke(dp(1.2f), skin.chipBorderColor)
+            }
+            elevation = dp(14f).toFloat()
+            val pad = dp(14f)
+            setPadding(pad, pad, pad, pad)
+            layoutParams = ViewGroup.LayoutParams(popupW, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(10f)
+            }
+        }
+        headerRow.addView(TextView(this).apply {
+            text = "New Canned Snippet"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(skin.textColor)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        val closeBtn = ImageView(this).apply {
+            val d = ContextCompat.getDrawable(context, R.drawable.ic_x)?.mutate()
+            d?.setTint(skin.subtleTextColor)
+            setImageDrawable(d)
+            setPadding(dp(4f), dp(4f), dp(4f), dp(4f))
+            layoutParams = LinearLayout.LayoutParams(dp(24f), dp(24f))
+        }
+        headerRow.addView(closeBtn)
+        card.addView(headerRow)
+
+        val inputEt = EditText(this).apply {
+            hint = "Type or paste canned phrase..."
+            setHintTextColor(skin.subtleTextColor)
+            setTextColor(skin.textColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8f).toFloat()
+                setColor(ColorUtils.setAlphaComponent(skin.background, 200))
+                setStroke(dp(1f), skin.chipBorderColor)
+            }
+            setPadding(dp(10f), dp(10f), dp(10f), dp(10f))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(12f)
+            }
+        }
+        card.addView(inputEt)
+
+        var dialogPopup: PopupWindow? = null
+        closeBtn.setOnClickListener {
+            try { dialogPopup?.dismiss() } catch (_: Exception) {}
+        }
+
+        val saveBtn = TextView(this).apply {
+            text = "Save Snippet"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(skin.actionTextColor)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10f).toFloat()
+                setColor(skin.accent)
+            }
+            setPadding(0, dp(10f), 0, dp(10f))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setOnClickListener {
+                feedback(this)
+                val text = inputEt.text?.toString()?.trim() ?: ""
+                if (text.isNotBlank()) {
+                    ClipboardHistory.addSnippet(this@KeyboardService, text, pinned = true)
+                    Toast.makeText(this@KeyboardService, "Snippet saved", Toast.LENGTH_SHORT).show()
+                    try { dialogPopup?.dismiss() } catch (_: Exception) {}
+                    showCannedSnippetsBar()
+                }
+            }
+        }
+        card.addView(saveBtn)
+
+        dialogPopup = PopupWindow(card, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true
+            isFocusable = true
+            elevation = dp(16f).toFloat()
+        }
+        val target = window.window?.decorView ?: imeHost ?: rootLayout
+        try {
+            dialogPopup.showAtLocation(target, Gravity.CENTER, 0, -dp(40f))
+        } catch (_: Exception) {}
+    }
+
     private fun toggleClipboardOptionsPopup(anchor: View, panel: LinearLayout) {
         if (clipOptionsPopup?.isShowing == true) {
             try { clipOptionsPopup?.dismiss() } catch (_: Exception) {}
@@ -5070,21 +6384,24 @@ class KeyboardService : InputMethodService() {
         if (SystemClock.uptimeMillis() - clipOptionsDismissTime < 250L) {
             return
         }
+        dismissAllPopups()
 
-        val popupW = dp(270f).coerceAtMost((screenW() * 0.9f).toInt())
+        val popupW = dp(300f).coerceAtMost((screenW() * 0.90f).toInt())
+
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val bg = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(14f).toFloat()
+                cornerRadius = dp(16f).toFloat()
                 setColor(skin.surface)
-                setStroke(dp(1f), ColorUtils.setAlphaComponent(skin.textColor, 36))
+                setStroke(dp(1.2f), skin.chipBorderColor)
             }
             background = bg
-            elevation = dp(14f).toFloat()
-            val padH = dp(14f)
-            val padV = dp(12f)
+            elevation = dp(20f).toFloat()
+            val padH = dp(16f)
+            val padV = dp(14f)
             setPadding(padH, padV, padH, padV)
+            isClickable = true
             layoutParams = ViewGroup.LayoutParams(popupW, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
@@ -5097,7 +6414,7 @@ class KeyboardService : InputMethodService() {
         }
         val titleTv = TextView(this).apply {
             text = "Clipboard Options"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTypeface(null, Typeface.BOLD)
             setTextColor(skin.textColor)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -5194,36 +6511,23 @@ class KeyboardService : InputMethodService() {
         }
         card.addView(rowScreenshots)
 
-        val popup = PopupWindow(card, popupW, ViewGroup.LayoutParams.WRAP_CONTENT, false).apply {
-            windowLayoutType = WindowManager.LayoutParams.TYPE_APPLICATION_PANEL
+        val popup = PopupWindow(card, popupW, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
             isOutsideTouchable = true
-            isFocusable = false
-            elevation = dp(14f).toFloat()
+            isFocusable = true
+            elevation = dp(20f).toFloat()
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setOnDismissListener {
+                clipOptionsDismissTime = SystemClock.uptimeMillis()
+                if (clipOptionsPopup === this) {
+                    clipOptionsPopup = null
+                }
+            }
         }
         clipOptionsPopup = popup
-        popup.setTouchInterceptor { _, event ->
-            if (event.action == MotionEvent.ACTION_OUTSIDE) {
-                try { popup.dismiss() } catch (_: Exception) {}
-                true
-            } else {
-                false
-            }
-        }
-        popup.setOnDismissListener {
-            clipOptionsDismissTime = SystemClock.uptimeMillis()
-            if (clipOptionsPopup === popup) {
-                clipOptionsPopup = null
-            }
-        }
-
-        val loc = IntArray(2)
-        anchor.getLocationOnScreen(loc)
-        val popupX = (loc[0] + anchor.width - popupW).coerceAtLeast(dp(8f))
-        val popupY = loc[1] + anchor.height + dp(4f)
-
+        val target = window.window?.decorView ?: imeHost ?: rootLayout
         try {
-            popup.showAtLocation(anchor, Gravity.NO_GRAVITY, popupX, popupY)
+            popup.showAtLocation(target, Gravity.CENTER, 0, 0)
+            buzz()
         } catch (_: Exception) {
             try {
                 popup.showAsDropDown(anchor, -(popupW - anchor.width), dp(4f))
@@ -5255,8 +6559,7 @@ class KeyboardService : InputMethodService() {
                     ClipboardHistory.setEnabled(this, category, true)
                     ScreenshotWatcher.sync(this, scanNow = false)
                 } else {
-                    try { clipOptionsPopup?.dismiss() } catch (_: Exception) {}
-                    clipOptionsPopup = null
+                    dismissAllPopups()
                     launchClipPermission(category)
                 }
             }
@@ -5749,37 +7052,48 @@ class KeyboardService : InputMethodService() {
     }
 
     private fun isUrlOrEmail(ic: InputConnection): Boolean {
-        val info = currentInputEditorInfo ?: return false
-        val variation = info.inputType and InputType.TYPE_MASK_VARIATION
-        if (variation == InputType.TYPE_TEXT_VARIATION_URI ||
-            variation == InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
-            variation == InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS) {
+        val active = currentWord.toString().trim()
+        if (active.contains("://") || active.startsWith("www.") || active.contains("@")) {
+            return true
+        }
+        if (active.contains(".") && (active.endsWith(".com") || active.endsWith(".org") || active.endsWith(".net") || active.endsWith(".io") || active.endsWith(".edu") || active.endsWith(".gov") || active.endsWith(".co") || active.endsWith(".app") || active.endsWith(".dev"))) {
             return true
         }
         val before = ic.getTextBeforeCursor(20, 0)?.toString() ?: ""
-        return before.contains("http://") || before.contains("https://") || before.contains("www.") || before.contains("@")
+        if (before.endsWith("://") || before.endsWith("www.")) {
+            return true
+        }
+        val info = currentInputEditorInfo ?: return false
+        val variation = info.inputType and InputType.TYPE_MASK_VARIATION
+        if (variation == InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
+            variation == InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS) {
+            return true
+        }
+        return false
     }
 
     private fun handleSpacePress() {
         val ic = currentInputConnection ?: return
+        hasTypedInCurrentSession = true
         val activeWord = currentWord.toString()
         val isPassword = isPasswordField()
         val isUrl = isUrlOrEmail(ic)
 
-        val candidate = currentAutoCorrectCandidate ?: run {
-            if (activeWord.isNotEmpty() && !isPassword && !isUrl) {
-                val corr = gnosis.keyboard.suggest.GnosisSpellingScorer.findCorrection(activeWord)
-                if (corr != null) {
-                    Candidate(corr.first, corr.second, CandidateKind.CORRECTION)
-                } else {
-                    getTypingEngine()?.onInputUpdate(activeWord, extractContextWords(ic, activeWord))?.autoCorrect
-                }
-            } else null
-        }
+        val lower = activeWord.lowercase()
+        val directContraction = GnosisContractionEngine.getContraction(activeWord) ?: GnosisSentenceExplorer.CONTRACTION_MAP[lower]
+        val directTypo = GnosisSentenceExplorer.COMMON_SHORT_TYPOS[lower]
+        val autoCandidate = currentAutoCorrectCandidate
 
-        if (autoCorrectEnabled && activeWord.isNotEmpty() && candidate != null &&
-            autocorrectEngine.shouldAutoCorrect(candidate, activeWord, isPassword, isUrl)) {
-            val corrected = candidate.word
+        val toCorrect = if (directContraction != null) {
+            directContraction
+        } else if (directTypo != null) {
+            GnosisSentenceExplorer.preserveCase(activeWord, directTypo)
+        } else if (autoCandidate != null && autoCandidate.type == CandidateType.AUTO_CORRECT && !autoCandidate.text.equals(activeWord, ignoreCase = true)) {
+            autoCandidate.text
+        } else null
+
+        if (autoCorrectEnabled && activeWord.isNotEmpty() && !isPassword && !isUrl && toCorrect != null) {
+            val corrected = toCorrect
 
             if (corrected.contains(" ")) {
                 val before = ic.getTextBeforeCursor(60, 0)?.toString() ?: ""
@@ -5797,11 +7111,18 @@ class KeyboardService : InputMethodService() {
                 ic.deleteSurroundingText(activeWord.length, 0)
             }
             ic.commitText("$corrected ", 1)
-            autocorrectEngine.recordCorrection(activeWord, corrected)
+            GnosisEngine.recordCorrection(activeWord, corrected)
             try {
-                val ctx = extractContextWords(ic, corrected)
-                GnosisNeuralVectorEngine.recordUserSelection(ctx, corrected)
-            } catch (_: Throwable) {}
+                if (!previewMode) {
+                    GnosisEngine.onWordCommitted(corrected, extractContextWords(ic, corrected))
+                    WordDictionary.learn(this, corrected)
+                }
+                if (lastCommittedWord.isNotEmpty() && !previewMode) {
+                    WordDictionary.learnTransition(this, lastCommittedWord, corrected)
+                }
+            } catch (e: Throwable) {
+                android.util.Log.e("KeyboardService", "autoCorrect commit learning error", e)
+            }
             val prefs = Skins.prefs(this)
             if (prefs.getBoolean(TypingStatisticsRepository.PREF_STATS_ENABLED, true) && !isPassword) {
                 statsRepository.recordAutoCorrection(activeWord, corrected)
@@ -5831,19 +7152,17 @@ class KeyboardService : InputMethodService() {
     }
 
     private fun extractContextWords(ic: InputConnection, activeWord: String): List<String> {
-        val before = ic.getTextBeforeCursor(80, 0)?.toString() ?: return emptyList()
-        val withoutActive = if (activeWord.isNotEmpty() && before.endsWith(activeWord)) {
-            before.substring(0, before.length - activeWord.length)
-        } else {
-            before
+        val before = ic.getTextBeforeCursor(120, 0)?.toString() ?: return emptyList()
+        var text = before.trimEnd()
+        if (activeWord.isNotEmpty() && text.endsWith(activeWord, ignoreCase = true)) {
+            text = text.substring(0, text.length - activeWord.length).trimEnd()
         }
 
-        val trimmed = withoutActive.trimEnd()
-        if (trimmed.isEmpty() || trimmed.endsWith('.') || trimmed.endsWith('!') || trimmed.endsWith('?') || trimmed.endsWith('\n')) {
+        if (text.isEmpty() || text.endsWith('.') || text.endsWith('!') || text.endsWith('?') || text.endsWith('\n')) {
             return emptyList()
         }
 
-        return trimmed
+        return text
             .split(Regex("\\s+"))
             .map { token -> token.replace(Regex("[^a-zA-Z0-9']"), "").trim() }
             .filter { it.isNotEmpty() }
@@ -5878,27 +7197,31 @@ class KeyboardService : InputMethodService() {
         if (text != " ") {
             lastSpaceTapTime = 0L
         }
+        hasTypedInCurrentSession = true
         try {
             if (isListeningVoice) stopVoiceRecognition()
             val ic = currentInputConnection ?: return
+
             val isPunctuation = !isLetter && text.length == 1 && (text == "." || text == "," || text == "!" || text == "?" || text == ":" || text == ";")
-            if (isPunctuation && currentWord.isNotEmpty() && autoCorrectEnabled) {
+            if (isPunctuation && currentWord.isNotEmpty() && autoCorrectEnabled && !isPasswordField() && !isUrlOrEmail(ic)) {
                 val activeWord = currentWord.toString()
-                val candidate = currentAutoCorrectCandidate ?: run {
-                    if (!isPasswordField() && !isUrlOrEmail(ic)) {
-                        val corr = gnosis.keyboard.suggest.GnosisSpellingScorer.findCorrection(activeWord)
-                        if (corr != null) {
-                            Candidate(corr.first, corr.second, CandidateKind.CORRECTION)
-                        } else {
-                            getTypingEngine()?.onInputUpdate(activeWord, extractContextWords(ic, activeWord))?.autoCorrect
-                        }
-                    } else null
-                }
-                if (candidate != null && autocorrectEngine.shouldAutoCorrect(candidate, activeWord, isPasswordField(), isUrlOrEmail(ic))) {
-                    val corrected = candidate.word
+                val lower = activeWord.lowercase()
+                val directContraction = GnosisContractionEngine.getContraction(activeWord) ?: GnosisSentenceExplorer.CONTRACTION_MAP[lower]
+                val directTypo = GnosisSentenceExplorer.COMMON_SHORT_TYPOS[lower]
+                val autoCandidate = currentAutoCorrectCandidate
+                val toCorrect = if (directContraction != null) {
+                    directContraction
+                } else if (directTypo != null) {
+                    GnosisSentenceExplorer.preserveCase(activeWord, directTypo)
+                } else if (autoCandidate != null && autoCandidate.type == CandidateType.AUTO_CORRECT && !autoCandidate.text.equals(activeWord, ignoreCase = true)) {
+                    autoCandidate.text
+                } else null
+
+                if (toCorrect != null) {
+                    val corrected = toCorrect
                     ic.deleteSurroundingText(currentWord.length, 0)
                     ic.commitText(corrected, 1)
-                    autocorrectEngine.recordCorrection(activeWord, corrected)
+                    GnosisEngine.recordCorrection(activeWord, corrected)
                     val prefs = Skins.prefs(this)
                     if (prefs.getBoolean(TypingStatisticsRepository.PREF_STATS_ENABLED, true) && !isPasswordField()) {
                         statsRepository.recordAutoCorrection(activeWord, corrected)
@@ -5910,6 +7233,11 @@ class KeyboardService : InputMethodService() {
             }
 
             val inputClass = (currentInputEditorInfo?.inputType ?: 0) and InputType.TYPE_MASK_CLASS
+            val textToType = if (activeCoolFont != CoolFontEngine.FontStyle.NORMAL && isLetter && !isPasswordField() && !isUrlOrEmail(ic)) {
+                CoolFontEngine.transform(text, activeCoolFont)
+            } else {
+                text
+            }
             if (inputClass == InputType.TYPE_CLASS_PHONE && text.length == 1) {
                 val sent = when (text[0]) {
                     '0' -> { sendDownUpKeyEvents(KeyEvent.KEYCODE_0); true }
@@ -5928,28 +7256,19 @@ class KeyboardService : InputMethodService() {
                     else -> false
                 }
                 if (!sent) {
-                    ic.commitText(text, 1)
+                    ic.commitText(textToType, 1)
                 }
             } else {
-                ic.commitText(text, 1)
+                ic.commitText(textToType, 1)
             }
             isNewInputSession = false
-            val charPrefs = Skins.prefs(this)
-            if (charPrefs.getBoolean(TypingStatisticsRepository.PREF_STATS_ENABLED, true) && !isPasswordField()) {
+            hasTypedInCurrentSession = true
+            if (statsLoggingEnabled && !isPasswordField()) {
                 statsRepository.recordCharactersTyped(text.length)
             }
 
             if (isLetter && text.length == 1 && text[0].isLetter()) {
-                if (currentWord.isNotEmpty()) {
-                    currentWord.append(text[0])
-                } else {
-                    val wordBefore = try { getWordBeforeCursor(ic) } catch (_: Throwable) { "" }
-                    if (wordBefore.isNotEmpty()) {
-                        currentWord.append(wordBefore)
-                    } else {
-                        currentWord.append(text[0])
-                    }
-                }
+                currentWord.append(text[0])
                 updateSuggestions()
             } else if (text == "'" && currentWord.isNotEmpty()) {
                 currentWord.append('\'')
@@ -5963,7 +7282,7 @@ class KeyboardService : InputMethodService() {
                     }
                     try {
                         if (!previewMode) {
-                            getTypingEngine()?.onWordCommitted(w, extractContextWords(ic, w))
+                            GnosisEngine.onWordCommitted(w, extractContextWords(ic, w))
                             WordDictionary.learn(this, w)
                         }
                         if (lastCommittedWord.isNotEmpty() && !previewMode) {
@@ -5993,17 +7312,28 @@ class KeyboardService : InputMethodService() {
         if (isListeningVoice) stopVoiceRecognition()
         val ic = currentInputConnection ?: return
         isNewInputSession = false
+        hasTypedInCurrentSession = true
 
-        if (autocorrectEngine.canUndo()) {
-            val record = autocorrectEngine.consumeUndo()
+        if (GnosisEngine.canUndo()) {
+            val record = GnosisEngine.consumeUndo()
             if (record != null) {
-                val before = ic.getTextBeforeCursor(record.corrected.length + 2, 0)?.toString() ?: ""
-                if (before.endsWith("${record.corrected} ")) {
-                    ic.deleteSurroundingText(record.corrected.length + 1, 0)
+                val targetWithSpace = "${record.corrected} "
+                val before = ic.getTextBeforeCursor(targetWithSpace.length + 8, 0)?.toString() ?: ""
+                if (before.endsWith(targetWithSpace)) {
+                    ic.deleteSurroundingText(targetWithSpace.length, 0)
                     ic.commitText(record.original, 1)
-                    val wordBefore = getWordBeforeCursor(ic)
+                    GnosisEngine.suppressWord(record.original)
                     currentWord.clear()
-                    currentWord.append(if (wordBefore.isNotEmpty()) wordBefore else record.original)
+                    currentWord.append(record.original)
+                    updateSuggestions()
+                    updateAutoCaps()
+                    return
+                } else if (before.endsWith(record.corrected)) {
+                    ic.deleteSurroundingText(record.corrected.length, 0)
+                    ic.commitText(record.original, 1)
+                    GnosisEngine.suppressWord(record.original)
+                    currentWord.clear()
+                    currentWord.append(record.original)
                     updateSuggestions()
                     updateAutoCaps()
                     return
@@ -6027,6 +7357,11 @@ class KeyboardService : InputMethodService() {
         currentWord.clear()
         if (wordBefore.isNotEmpty()) {
             currentWord.append(wordBefore)
+        }
+        val textBefore = ic.getTextBeforeCursor(40, 0)?.toString() ?: ""
+        if (currentWord.isEmpty() && textBefore.trim().isEmpty()) {
+            hasTypedInCurrentSession = false
+            lastCommittedWord = ""
         }
         updateSuggestions()
         updateAutoCaps()
@@ -6210,6 +7545,11 @@ class KeyboardService : InputMethodService() {
         if (wordBefore.isNotEmpty()) {
             currentWord.append(wordBefore)
         }
+        val textBefore = ic.getTextBeforeCursor(40, 0)?.toString() ?: ""
+        if (currentWord.isEmpty() && textBefore.trim().isEmpty()) {
+            hasTypedInCurrentSession = false
+            lastCommittedWord = ""
+        }
         updateSuggestions()
         updateAutoCaps()
     }
@@ -6235,7 +7575,7 @@ class KeyboardService : InputMethodService() {
             try {
                 if (!previewMode) {
                     if (ic != null) {
-                        getTypingEngine()?.onWordCommitted(word, extractContextWords(ic, ""))
+                        GnosisEngine.onWordCommitted(word, extractContextWords(ic, ""))
                     }
                     WordDictionary.learn(this, word)
                 }
@@ -6244,6 +7584,8 @@ class KeyboardService : InputMethodService() {
             }
             currentWord.clear()
             currentAutoCorrectCandidate = null
+            hasTypedInCurrentSession = true
+            lastCommittedWord = word
             updateSuggestions()
             if (shift == Shift.ONCE) {
                 shift = Shift.OFF
@@ -6339,22 +7681,7 @@ class KeyboardService : InputMethodService() {
     }
 
     private fun cycleLanguageAndLayout() {
-        val installedNonQwerty = LayoutExtensionManager.getInstalledLayouts(this).filter { it.id != "qwerty" }
-        if (installedNonQwerty.isNotEmpty()) {
-            cycleLayout()
-            return
-        }
-
-        val newLang = GnosisLanguageManager.cycleLanguage(this)
-        currentLayoutName = Skins.prefs(this).getString(Skins.KEY_LAYOUT, newLang.defaultLayout) ?: newLang.defaultLayout
-        EngineFactory.invalidateCache()
-        typingEngine = null
-        suggestionEngine = null
-        try {
-            Toast.makeText(this, "${newLang.name} (${newLang.shortLabel})", Toast.LENGTH_SHORT).show()
-        } catch (_: Exception) {}
-        renderFullKeyboard()
-        refreshSuggestionsNow()
+        cycleLayout()
     }
 
     private fun cycleLayout() {
@@ -6365,15 +7692,10 @@ class KeyboardService : InputMethodService() {
         currentLayoutName = layouts[nextIdx]
         Skins.prefs(this).edit().putString(Skins.KEY_LAYOUT, currentLayoutName).apply()
         val model = LayoutExtensionManager.getLayout(this, currentLayoutName)
-
-        val lang = GnosisLanguageManager.getLanguageForLayout(currentLayoutName)
-        GnosisLanguageManager.setActiveLanguage(this, lang.code)
-        EngineFactory.invalidateCache()
-        typingEngine = null
-        suggestionEngine = null
+        GnosisEngine.reset()
 
         try {
-            Toast.makeText(this, "${model.name} (${lang.shortLabel})", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, model.name, Toast.LENGTH_SHORT).show()
         } catch (_: Exception) {}
         renderFullKeyboard()
         refreshSuggestionsNow()
@@ -6440,24 +7762,22 @@ class KeyboardService : InputMethodService() {
         }
     }
 
-    private fun startVoiceInput() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            promptVoicePermission()
-            return
+    private fun isGoogleSpeechInstalled(): Boolean {
+        val googlePackages = listOf("com.google.android.tts", "com.google.android.googlequicksearchbox")
+        val intent = Intent(RecognitionService.SERVICE_INTERFACE)
+        val resolveInfos = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.queryIntentServices(intent, PackageManager.ResolveInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.queryIntentServices(intent, 0)
+            }
+        } catch (_: Exception) {
+            emptyList()
         }
-
-        if (isListeningVoice) {
-            stopVoiceRecognition()
-            return
+        return resolveInfos.any { info ->
+            googlePackages.any { pkg -> info.serviceInfo?.packageName?.equals(pkg, ignoreCase = true) == true }
         }
-
-        val comp = findRecognitionServiceComponent()
-        if (comp == null) {
-            showGoogleSpeechServiceRequiredUI()
-            return
-        }
-
-        startSystemVoiceRecognition()
     }
 
     private fun openGoogleSpeechPlayStore() {
@@ -6487,14 +7807,46 @@ class KeyboardService : InputMethodService() {
         }
     }
 
-    private fun showGoogleSpeechServiceRequiredUI() {
-        showVoiceListeningUI(
-            text = "Speech Recognition & Synthesis by Google required",
-            isError = true,
-            actionText = "Install"
-        ) {
-            openGoogleSpeechPlayStore()
+    private fun startVoiceInput() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            promptVoicePermission()
+            return
         }
+
+        if (isListeningVoice) {
+            stopVoiceRecognition()
+            return
+        }
+
+        val speechEngine = Skins.prefs(this).getString("setting_speech_engine", "google") ?: "google"
+        if (speechEngine == "google") {
+            if (!isGoogleSpeechInstalled()) {
+                showVoiceListeningUI(
+                    text = "Google Speech Recognition is not installed",
+                    isError = true,
+                    actionText = "Install"
+                ) {
+                    openGoogleSpeechPlayStore()
+                }
+                return
+            }
+        } else {
+            val comp = findRecognitionServiceComponent()
+            val available = SpeechRecognizer.isRecognitionAvailable(this) || comp != null
+            if (!available) {
+                showVoiceListeningUI(
+                    text = "Not available on device. Switch to Google Speech",
+                    isError = true,
+                    actionText = "Switch"
+                ) {
+                    Skins.prefs(this@KeyboardService).edit().putString("setting_speech_engine", "google").apply()
+                    startVoiceInput()
+                }
+                return
+            }
+        }
+
+        startSystemVoiceRecognition()
     }
 
     private fun extractSpeechText(bundle: Bundle?): String? {
@@ -6523,6 +7875,7 @@ class KeyboardService : InputMethodService() {
     }
 
     private fun findRecognitionServiceComponent(): ComponentName? {
+        val speechEngine = Skins.prefs(this).getString("setting_speech_engine", "google") ?: "google"
         val intent = Intent(RecognitionService.SERVICE_INTERFACE)
         val resolveInfos = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -6535,16 +7888,25 @@ class KeyboardService : InputMethodService() {
             emptyList()
         }
 
-        if (resolveInfos.isNotEmpty()) {
-            val preferredPackages = listOf(
-                "com.google.android.tts",
-                "com.google.android.googlequicksearchbox"
-            )
+        if (speechEngine == "google") {
+            val preferredPackages = listOf("com.google.android.tts", "com.google.android.googlequicksearchbox")
             for (pkg in preferredPackages) {
-                val match = resolveInfos.firstOrNull { it.serviceInfo.packageName.equals(pkg, ignoreCase = true) }
-                if (match != null) {
+                val match = resolveInfos.firstOrNull { it.serviceInfo?.packageName?.equals(pkg, ignoreCase = true) == true }
+                if (match != null && match.serviceInfo != null) {
                     return ComponentName(match.serviceInfo.packageName, match.serviceInfo.name)
                 }
+            }
+        } else {
+            val nonGoogle = resolveInfos.firstOrNull { info ->
+                val p = info.serviceInfo?.packageName?.lowercase(Locale.ROOT) ?: ""
+                !p.contains("com.google.android.tts") && !p.contains("googlequicksearchbox")
+            }
+            if (nonGoogle?.serviceInfo != null) {
+                return ComponentName(nonGoogle.serviceInfo.packageName, nonGoogle.serviceInfo.name)
+            }
+            val anyService = resolveInfos.firstOrNull { it.serviceInfo != null }
+            if (anyService?.serviceInfo != null) {
+                return ComponentName(anyService.serviceInfo.packageName, anyService.serviceInfo.name)
             }
         }
         return null
@@ -6810,7 +8172,8 @@ class KeyboardService : InputMethodService() {
 
             val recognizer = getOrCreateSpeechRecognizer()
             if (recognizer == null) {
-                showGoogleSpeechServiceRequiredUI()
+                showVoiceListeningUI("Voice recognition service unavailable", isError = true)
+                handler.postDelayed({ if (!isListeningVoice) updateSuggestions() }, 2000)
                 return
             }
 
@@ -6857,7 +8220,8 @@ class KeyboardService : InputMethodService() {
                 if (fresh != null) {
                     fresh.startListening(intent)
                 } else {
-                    showGoogleSpeechServiceRequiredUI()
+                    showVoiceListeningUI("Voice recognition service unavailable", isError = true)
+                    handler.postDelayed({ if (!isListeningVoice) updateSuggestions() }, 2000)
                     return
                 }
             }
@@ -6900,7 +8264,9 @@ class KeyboardService : InputMethodService() {
     }
 
     private fun feedback(view: View? = null) {
-        showFloatControlsTemporarily()
+        if (floatActive()) {
+            showFloatControlsTemporarily()
+        }
         val target = view ?: if (::rootLayout.isInitialized) rootLayout else null
         if (hapticEnabled && target != null) {
             Haptics.buzz(this, hapticPressure, target)

@@ -854,4 +854,29 @@ object EmojiSuggestionEngine {
 
         return emptyList()
     }
+
+    fun search(query: String, maxResults: Int = 45): List<String> {
+        val q = query.trim().lowercase(Locale.ROOT)
+        if (q.isEmpty()) return emptyList()
+        val results = LinkedHashSet<String>()
+        // 1. Direct key match
+        dynamicEmojiMap[q]?.let { results.addAll(it) }
+        // 2. Prefix matches on keys
+        for ((k, v) in dynamicEmojiMap) {
+            if (results.size >= maxResults) break
+            if (k.startsWith(q)) {
+                results.addAll(v)
+            }
+        }
+        // 3. Substring matches on keys
+        if (results.size < maxResults) {
+            for ((k, v) in dynamicEmojiMap) {
+                if (results.size >= maxResults) break
+                if (k.contains(q)) {
+                    results.addAll(v)
+                }
+            }
+        }
+        return results.take(maxResults)
+    }
 }

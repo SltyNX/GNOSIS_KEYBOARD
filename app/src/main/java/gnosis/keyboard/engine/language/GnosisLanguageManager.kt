@@ -72,13 +72,7 @@ object GnosisLanguageManager {
                 "it" -> getLanguageByCode("it")
                 "ar" -> getLanguageByCode("ar")
                 "tr" -> getLanguageByCode("tr")
-                "en" -> {
-                    if (sysCountry == "IN" && gnosis.keyboard.HinglishDictionaryManager.isEnabled(context)) {
-                        getLanguageByCode("hinglish")
-                    } else {
-                        getLanguageByCode("en")
-                    }
-                }
+                "en" -> getLanguageByCode("en")
                 else -> null
             }
 

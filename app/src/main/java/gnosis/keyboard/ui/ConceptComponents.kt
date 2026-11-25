@@ -89,7 +89,7 @@ object ConceptComponents {
     fun createCard(context: Context, tokens: ConceptThemeTokens, density: Float): LinearLayout {
         return LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            val radius = 20f * density
+            val radius = 14f * density
             val strokeW = (tokens.strokeWidthDp * density).toInt().coerceAtLeast(1)
             background = GradientDrawable().apply {
                 cornerRadius = radius
@@ -111,7 +111,7 @@ object ConceptComponents {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             setTypeface(null, Typeface.BOLD)
             setTextColor(tokens.textSecondary)
-            setPadding((6 * density).toInt(), (14 * density).toInt(), (6 * density).toInt(), (8 * density).toInt())
+            setPadding((16 * density).toInt(), (14 * density).toInt(), (16 * density).toInt(), (8 * density).toInt())
         }
     }
 
@@ -408,7 +408,7 @@ object ConceptComponents {
             gravity = Gravity.CENTER_VERTICAL
             setPadding((4 * density).toInt(), (4 * density).toInt(), (4 * density).toInt(), (4 * density).toInt())
             background = GradientDrawable().apply {
-                cornerRadius = (14 * density)
+                cornerRadius = (10 * density)
                 setColor(tokens.chipBg)
                 setStroke((1 * density).toInt(), tokens.chipBorder)
             }
@@ -416,8 +416,8 @@ object ConceptComponents {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 (42 * density).toInt()
             ).apply {
-                marginStart = (14 * density).toInt()
-                marginEnd = (14 * density).toInt()
+                marginStart = (16 * density).toInt()
+                marginEnd = (16 * density).toInt()
                 bottomMargin = (12 * density).toInt()
             }
         }
@@ -440,7 +440,7 @@ object ConceptComponents {
                 if (isSel) {
                     target.setTextColor(if (tokens.isLight) Color.parseColor("#0F172A") else Color.WHITE)
                     target.background = GradientDrawable().apply {
-                        cornerRadius = (11 * density)
+                        cornerRadius = (8 * density)
                         setColor(tokens.surface)
                         setStroke((1 * density).toInt(), tokens.cardBorder)
                     }
@@ -475,7 +475,7 @@ object ConceptComponents {
             gravity = Gravity.CENTER_VERTICAL
             setPadding((14 * density).toInt(), (11 * density).toInt(), (14 * density).toInt(), (11 * density).toInt())
             background = GradientDrawable().apply {
-                cornerRadius = (14 * density)
+                cornerRadius = (10 * density)
                 setColor(tokens.chipBg)
                 setStroke((1 * density).toInt(), tokens.chipBorder)
             }
@@ -483,8 +483,10 @@ object ConceptComponents {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
+                marginStart = (16 * density).toInt()
+                marginEnd = (16 * density).toInt()
                 topMargin = (6 * density).toInt()
-                bottomMargin = (16 * density).toInt()
+                bottomMargin = (14 * density).toInt()
             }
 
             if (iconRes != 0) {
@@ -544,13 +546,13 @@ object ConceptComponents {
             if (isAccent) {
                 setTextColor(tokens.onAccentText)
                 background = GradientDrawable().apply {
-                    cornerRadius = (24 * density)
+                    cornerRadius = (12 * density)
                     setColor(tokens.accent)
                 }
             } else {
                 setTextColor(tokens.textPrimary)
                 background = GradientDrawable().apply {
-                    cornerRadius = (24 * density)
+                    cornerRadius = (12 * density)
                     setColor(tokens.chipBg)
                     setStroke((1 * density).toInt(), tokens.cardBorder)
                 }
@@ -1817,14 +1819,14 @@ object ConceptComponents {
                     chip.setTextColor(tokens.onAccentText)
                     chip.setTypeface(null, Typeface.BOLD)
                     chip.background = GradientDrawable().apply {
-                        cornerRadius = dp(14f).toFloat()
+                        cornerRadius = dp(8f).toFloat()
                         setColor(tokens.accent)
                     }
                 } else {
                     chip.setTextColor(tokens.textSecondary)
                     chip.setTypeface(null, Typeface.NORMAL)
                     chip.background = GradientDrawable().apply {
-                        cornerRadius = dp(14f).toFloat()
+                        cornerRadius = dp(8f).toFloat()
                         setColor(tokens.chipBg)
                         setStroke(dp(1f), tokens.cardBorder)
                     }

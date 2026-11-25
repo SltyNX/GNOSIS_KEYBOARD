@@ -42,10 +42,12 @@ object ConceptDesignTokens {
 
     fun resolve(context: Context): ConceptThemeTokens {
         val p = Skins.prefs(context)
-        val mode = if (p.contains(Skins.KEY_THEME_MODE)) {
-            p.getString(Skins.KEY_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
-        } else {
+        val mode = if (p.contains(Skins.KEY_APP_THEME_MODE)) {
+            p.getString(Skins.KEY_APP_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
+        } else if (p.contains("settings_theme_mode")) {
             p.getString("settings_theme_mode", Skins.MODE_AUTO) ?: Skins.MODE_AUTO
+        } else {
+            p.getString(Skins.KEY_THEME_MODE, Skins.MODE_AUTO) ?: Skins.MODE_AUTO
         }
         val isLight = when (mode) {
             Skins.MODE_LIGHT -> true
@@ -53,14 +55,16 @@ object ConceptDesignTokens {
             else -> !Skins.isSystemDark(context)
         }
 
-        val savedManualAccent = if (p.contains("settings_accent_color")) {
-            p.getInt("settings_accent_color", Skins.DEFAULT_ACCENT)
-        } else {
-            p.getInt(Skins.KEY_ACCENT, Skins.DEFAULT_ACCENT)
-        }
-
         val defaultAccent = if (isLight) Color.parseColor("#2563EB") else Color.parseColor("#3B82F6")
-        val accent = if (savedManualAccent != 0 && savedManualAccent != Skins.DEFAULT_ACCENT) savedManualAccent else defaultAccent
+        val accent = if (p.contains(Skins.KEY_ACCENT)) {
+            val a = p.getInt(Skins.KEY_ACCENT, defaultAccent)
+            if (a != 0) a else defaultAccent
+        } else if (p.contains("settings_accent_color")) {
+            val a = p.getInt("settings_accent_color", defaultAccent)
+            if (a != 0) a else defaultAccent
+        } else {
+            defaultAccent
+        }
 
         val onAccent = if (ColorUtils.calculateLuminance(accent) > 0.45) Color.parseColor("#0F172A") else Color.WHITE
 

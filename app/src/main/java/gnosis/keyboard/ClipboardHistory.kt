@@ -389,6 +389,31 @@ object ClipboardHistory {
     }
 
     @Synchronized
+    fun addSnippet(ctx: Context, text: String, pinned: Boolean = true): ClipItem? {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return null
+        init(ctx)
+        val existing = inMemoryHistory.find { !it.isImage && it.text == trimmed }
+        if (existing != null) {
+            existing.isPinned = pinned
+            save(ctx)
+            notifyChanged()
+            return existing
+        }
+        val item = ClipItem(
+            text = trimmed,
+            isImage = false,
+            isPinned = pinned,
+            category = CAT_TEXT,
+            timestamp = System.currentTimeMillis()
+        )
+        inMemoryHistory.add(0, item)
+        save(ctx)
+        notifyChanged()
+        return item
+    }
+
+    @Synchronized
     fun togglePin(ctx: Context, id: String) {
         init(ctx)
         val item = inMemoryHistory.find { it.id == id } ?: return

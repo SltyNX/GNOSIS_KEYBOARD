@@ -116,6 +116,8 @@ object Skins {
     const val PREFS = "gnosis_kb"
     const val KEY_THEME = "theme"
     const val KEY_THEME_MODE = "theme_mode"
+    const val KEY_APP_THEME_MODE = "app_theme_mode"
+    const val KEY_KEYBOARD_THEME_MODE = "keyboard_theme_mode"
     const val KEY_LAST_DARK = "theme_last_dark"
     const val KEY_KEY_STYLE = "key_style"
     const val MODE_DARK = "dark"
@@ -127,6 +129,21 @@ object Skins {
     const val STYLE_NEUMORPHIC = "neumorphic"
     const val KEY_ACCENT = "accent_color"
     const val KEY_KEY_BORDERS = "key_borders"
+    const val KEY_REVAMPED_TOOLBAR_ICON_SIZE = "revamped_toolbar_icon_size"
+    const val KEY_CLASSIC_TOOLBAR_ICON_SIZE = "classic_toolbar_icon_size"
+    const val DEFAULT_REVAMPED_TOOLBAR_ICON_SIZE = 32
+    const val DEFAULT_CLASSIC_TOOLBAR_ICON_SIZE = 32
+    const val KEY_TOOLBAR_HEIGHT_REVAMPED = "toolbar_height_revamped"
+    const val KEY_TOOLBAR_HEIGHT_CLASSIC = "toolbar_height_classic"
+    const val DEFAULT_TOOLBAR_HEIGHT_REVAMPED = 42
+    const val DEFAULT_TOOLBAR_HEIGHT_CLASSIC = 42
+    const val KEY_KEYBOARD_HEIGHT_CLASSIC = "keyboard_height_classic"
+    const val DEFAULT_KEYBOARD_HEIGHT_CLASSIC = 45
+    const val KEY_SPACE_HOLD_SWITCH_LAYOUT = "space_hold_switch_layout"
+    const val DEFAULT_SPACE_HOLD_SWITCH_LAYOUT = true
+    const val KEY_ONLINE_PREDICTIONS = "online_predictions_enabled"
+    const val DEFAULT_ONLINE_PREDICTIONS = true
+    const val DEFAULT_AUTOCORRECT = true
     const val KEY_HIGH_CONTRAST = "high_contrast"
     const val KEY_ONE_HANDED = "one_handed"
     const val KEY_FLOATING = "floating_keyboard"
@@ -171,6 +188,10 @@ object Skins {
     const val DEFAULT_SECONDARY_HINTS = true
     const val KEY_USE_SYSTEM_FONT = "studio_use_system_font"
     const val DEFAULT_USE_SYSTEM_FONT = false
+    const val KEY_PARTICLE_EFFECTS = "particle_effects_style"
+    const val DEFAULT_PARTICLE_EFFECTS = "off"
+    const val KEY_COOL_FONT = "cool_font_active_style"
+    const val DEFAULT_COOL_FONT = "normal"
 
     const val KEY_STUDIO_SHAPE = "studio_key_shape"
     const val SHAPE_ROUNDED = "rounded"
@@ -269,6 +290,7 @@ object Skins {
 
     const val THEME_MD3_DYNAMIC = "md3_dynamic"
     const val THEME_MD3_DYNAMIC_LIGHT = "md3_dynamic_light"
+    const val DEFAULT_THEME = THEME_MD3_DYNAMIC
     const val THEME_LUCID_VOID = "lucid-void"
     const val THEME_LUCID_VOID_LIGHT = "lucid-void_light"
 
@@ -569,18 +591,22 @@ object Skins {
             val pairedDark = getPairedThemeId(chosen, targetLight = false)
             if (PRESETS[pairedDark]?.isLight == false) return pairedDark
         }
-        return "md3_dynamic"
+        return THEME_MD3_DYNAMIC
     }
 
     fun resolveThemeId(ctx: Context, p: SharedPreferences = prefs(ctx)): String {
-        val chosen = p.getString(KEY_THEME, "md3_dynamic") ?: "md3_dynamic"
+        val chosen = p.getString(KEY_THEME, THEME_MD3_DYNAMIC) ?: THEME_MD3_DYNAMIC
         val effectiveChosen = if (chosen.contains("void_lucent") || chosen.contains("void_glass") || chosen.contains("liquid_glass")) {
-            p.edit().putString(KEY_THEME, "md3_dynamic").apply()
-            "md3_dynamic"
+            p.edit().putString(KEY_THEME, THEME_MD3_DYNAMIC).apply()
+            THEME_MD3_DYNAMIC
         } else {
             chosen
         }
-        val mode = p.getString(KEY_THEME_MODE, MODE_AUTO) ?: MODE_AUTO
+        val mode = if (p.contains(KEY_KEYBOARD_THEME_MODE)) {
+            p.getString(KEY_KEYBOARD_THEME_MODE, MODE_AUTO) ?: MODE_AUTO
+        } else {
+            p.getString(KEY_THEME_MODE, MODE_AUTO) ?: MODE_AUTO
+        }
         return when (mode) {
             MODE_LIGHT -> getPairedThemeId(effectiveChosen, targetLight = true)
             MODE_DARK -> getPairedThemeId(effectiveChosen, targetLight = false)
@@ -612,19 +638,23 @@ object Skins {
         useSystemFont: Boolean = false
     ): Typeface {
         val styleInt = if (bold) Typeface.BOLD else Typeface.NORMAL
-        if (useSystemFont || fontStyle == FONT_DEFAULT || fontStyle.isBlank()) {
+        if (useSystemFont) {
             return Typeface.create(Typeface.DEFAULT, styleInt)
         }
-        if (ctx != null) {
+        if (ctx != null && fontStyle != FONT_DEFAULT && fontStyle.isNotBlank()) {
             val customTf = FontExtensionManager.getTypeface(ctx, fontStyle, bold)
             if (customTf != null) return customTf
         }
         return when (fontStyle) {
             FONT_SERIF -> Typeface.create(Typeface.SERIF, styleInt)
             FONT_MONO -> Typeface.create(Typeface.MONOSPACE, styleInt)
-            FONT_ROUNDED -> Typeface.create("sans-serif-medium", styleInt)
+            FONT_ROUNDED -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                Typeface.create(Typeface.create("sans-serif-rounded", Typeface.NORMAL), if (bold) 700 else 400, false)
+            } else {
+                Typeface.create("sans-serif-medium", styleInt)
+            }
             FONT_CONDENSED -> Typeface.create("sans-serif-condensed", styleInt)
-            FONT_LIGHT -> Typeface.create("sans-serif-light", styleInt)
+            FONT_LIGHT -> if (bold) Typeface.create("sans-serif", Typeface.NORMAL) else Typeface.create("sans-serif-light", Typeface.NORMAL)
             else -> Typeface.create(Typeface.DEFAULT, styleInt)
         }
     }
@@ -941,7 +971,7 @@ object Skins {
             strokePaint.colorFilter = colorFilter
         }
 
-        @Deprecated("Deprecated in Java")
+        @Suppress("DEPRECATION")
         override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
@@ -996,7 +1026,7 @@ object Skins {
             paint.colorFilter = colorFilter
         }
 
-        @Deprecated("Deprecated in Java")
+        @Suppress("DEPRECATION")
         override fun getOpacity(): Int = PixelFormat.OPAQUE
     }
 
@@ -1141,7 +1171,7 @@ object Skins {
         val borderWidthDp = prefFloat(p, KEY_STUDIO_BORDER_WIDTH, 0f).coerceIn(0f, 4f)
         val shadowDp = prefFloat(p, KEY_STUDIO_SHADOW, 0f).coerceIn(0f, 12f)
         val fontStyle = p.getString(KEY_STUDIO_FONT, FONT_DEFAULT) ?: FONT_DEFAULT
-        val fontBold = p.getBoolean(KEY_STUDIO_FONT_BOLD, true)
+        val fontBold = p.getBoolean(KEY_STUDIO_FONT_BOLD, false)
         val rawFontScale = prefFloat(p, KEY_STUDIO_FONT_SCALE, 0.80f)
         val fontScale = (if (rawFontScale > 10f) rawFontScale / 100f else rawFontScale).coerceIn(0.80f, 1.30f)
         val useSystemFont = p.getBoolean(KEY_USE_SYSTEM_FONT, DEFAULT_USE_SYSTEM_FONT)
@@ -1227,7 +1257,7 @@ object Skins {
         val tintFactor = tintPct / 100f
 
         if (isLucidVoid) {
-            rawAccent = Color.parseColor(preset.defaultAccent)
+            rawAccent = if (p.contains(KEY_ACCENT)) rawAccentPref else Color.parseColor(preset.defaultAccent)
             val alpha255 = (opFactor * 255f).toInt().coerceIn(16, 248)
             val baseBg = if (preset.isLight) {
                 if (tintFactor > 0f) ColorUtils.blendARGB(Color.parseColor(preset.bg), Color.parseColor("#94A3B8"), tintFactor * 0.40f)
@@ -1438,14 +1468,14 @@ object Skins {
             special: Boolean
         ): Drawable {
             val rad = 10f * d
-            val strokeW = (1f * d).toInt().coerceAtLeast(1)
+            var strokeW = (1f * d).toInt().coerceAtLeast(1)
             val pressStrokeW = (1.2f * d).toInt().coerceAtLeast(1)
 
-            val normalStart: Int
-            val normalEnd: Int
-            val normalStroke: Int
-            val pressStart: Int
-            val pressEnd: Int
+            var normalStart: Int
+            var normalEnd: Int
+            var normalStroke: Int
+            var pressStart: Int
+            var pressEnd: Int
             val pressStroke: Int
 
             if (preset.isLight) {
@@ -1501,13 +1531,33 @@ object Skins {
                 }
             }
 
+            if (tintFactor > 0f) {
+                val milkyTone = if (preset.isLight) Color.WHITE else Color.parseColor("#475569")
+                normalStart = ColorUtils.blendARGB(normalStart, milkyTone, tintFactor * 0.45f)
+                normalEnd = ColorUtils.blendARGB(normalEnd, milkyTone, tintFactor * 0.40f)
+                pressStart = ColorUtils.blendARGB(pressStart, milkyTone, tintFactor * 0.45f)
+                pressEnd = ColorUtils.blendARGB(pressEnd, milkyTone, tintFactor * 0.40f)
+            }
+            if (lucidBlurRadius > 0f) {
+                val blurFraction = (lucidBlurRadius / 80f).coerceIn(0f, 1f)
+                normalStroke = ColorUtils.setAlphaComponent(
+                    normalStroke,
+                    (Color.alpha(normalStroke) * (1f - blurFraction * 0.35f)).toInt().coerceIn(20, 255)
+                )
+                strokeW = (strokeW * (1f + blurFraction * 0.5f)).toInt().coerceAtLeast(1)
+            }
+
             val normalD = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(normalStart, normalEnd)).apply {
                 cornerRadius = rad
-                setStroke(strokeW, normalStroke)
+                if (keyBorders || borderWidthDp > 0.05f) {
+                    setStroke(strokeW, normalStroke)
+                }
             }
             val pressedD = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(pressStart, pressEnd)).apply {
                 cornerRadius = rad
-                setStroke(pressStrokeW, pressStroke)
+                if (keyBorders || borderWidthDp > 0.05f) {
+                    setStroke(pressStrokeW, pressStroke)
+                }
             }
             return states(normalD, pressedD)
         }

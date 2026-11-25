@@ -63,7 +63,8 @@ object FontExtensionManager {
 
     fun getTypeface(context: Context, fontFilename: String, bold: Boolean = false): Typeface? {
         val styleInt = if (bold) Typeface.BOLD else Typeface.NORMAL
-        val file = File(getFontsDir(context), fontFilename)
+        val dir = getFontsDir(context)
+        val file = File(dir, fontFilename)
         if (file.exists()) {
             return try {
                 val tf = Typeface.createFromFile(file)
@@ -72,10 +73,22 @@ object FontExtensionManager {
                 null
             }
         }
-        val withExt = File(getFontsDir(context), "$fontFilename.ttf")
+        val withExt = File(dir, "$fontFilename.ttf")
         if (withExt.exists()) {
             return try {
                 val tf = Typeface.createFromFile(withExt)
+                Typeface.create(tf, styleInt)
+            } catch (_: Exception) {
+                null
+            }
+        }
+        val match = dir.listFiles()?.firstOrNull {
+            it.name.equals(fontFilename, ignoreCase = true) ||
+            it.nameWithoutExtension.equals(fontFilename.removeSuffix(".ttf").removeSuffix(".otf"), ignoreCase = true)
+        }
+        if (match != null && match.exists()) {
+            return try {
+                val tf = Typeface.createFromFile(match)
                 Typeface.create(tf, styleInt)
             } catch (_: Exception) {
                 null

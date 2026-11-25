@@ -40,12 +40,7 @@ class VoiceInputActivity : ComponentActivity() {
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
             })
         } catch (_: Exception) {
-            Toast.makeText(this, "Speech recognition app not available. Opening Play Store...", Toast.LENGTH_SHORT).show()
-            try {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.tts")).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                })
-            } catch (_: Exception) {}
+            Toast.makeText(this, "Voice recognition service is not available on this device", Toast.LENGTH_SHORT).show()
             finish()
         }
     }
